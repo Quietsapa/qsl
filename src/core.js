@@ -2,7 +2,7 @@ export default {
     /**
      * Constants
      */
-    VERSION: '0.1.1',
+    VERSION: '0.1.2',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
@@ -86,6 +86,8 @@ export default {
     async init() {
         if (this.initialized) return this;
 
+        const loaderScript = document.currentScript;
+
         /* Check if QSL is already initialized */
         window.__QSL__ = window.__QSL__ || this;
 
@@ -135,7 +137,7 @@ export default {
         /**
          * Check if async loading is enabled
          */
-        const url = document.currentScript ? new URL(document.currentScript.src, document.baseURI) : null;
+        const url = loaderScript && loaderScript.src ? new URL(loaderScript.src, document.baseURI) : null;
         if (!url || url.searchParams.get('async') !== 'true') return this;
 
         /**

@@ -51,6 +51,48 @@ Or load a prebuilt bundle straight from a CDN:
 Both browser bundles register their types and call `init()` for you, then
 expose the instance as `window.__QSL__`.
 
+### Loading QSL without blocking the parser
+
+The tag above is a blocking one: the parser stops until QSL has downloaded.
+That is the simplest thing that works, and for a small file served from a CDN
+it is often fine.
+
+To take it off the critical path, mark the tag `async` and add `?async=true` to
+the URL. QSL then calls `window.QSLReady()` once it has finished initialising,
+and you do your work there:
+
+```html
+<script>
+  window.QSLReady = function () {
+    var qsl = window.__QSL__;
+    qsl.add({ id: 'gtm', type: 'script', src: 'https://example.com/gtm.js' });
+    qsl.load();
+  };
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl/dist/qsl.min.js?async=true"></script>
+```
+
+The callback exists because `async` removes any guarantee about ordering. An
+inline script placed after the tag runs while QSL is still downloading, so
+`window.__QSL__` is not there yet and reading it gives you `undefined`. The
+callback fires when the instance is actually ready.
+
+Three things to keep in mind:
+
+- **Define the callback before the tag.** QSL calls it once, immediately after
+  `init()`. If the global is not a function at that moment nothing happens —
+  no error, no retry.
+- **`?async=true` is required.** Without it QSL initialises normally and never
+  looks for a callback. The `async` attribute alone changes when the script
+  runs, not what it does.
+- **Rename it if `QSLReady` collides**, with `?callback=myHandler`. The name is
+  read from the same query string.
+
+The DOM is only guaranteed to be parsed up to the tag itself, so keep it at the
+end of `<body>` if your setup code touches elements. Triggers like `domready`
+and `load` handle the rest for you and fire correctly even when QSL arrives
+after those events have passed.
+
 | Build | Entry | Size (gzip) | Contents |
 | --- | --- | --- | --- |
 | `dist/qsl.mjs` | `src/index.js` | — | ESM, nothing registered, nothing started |
@@ -87,6 +129,18 @@ With a CDN bundle the registration is already done:
   qsl.load();
 </script>
 ```
+
+## Examples
+
+Runnable pages in [`examples/`](examples/) — open `index.html`, no build step.
+Each one starts with a description of the problem it solves.
+
+| Example | Problem |
+| --- | --- |
+| [consent-groups](examples/consent-groups/) | A cookie banner where the pixel fires on consent but the chat widget still waits for engagement |
+| [embed-on-visible](examples/embed-on-visible/) | A YouTube embed that costs nothing until someone scrolls to it |
+| [dependency-chain](examples/dependency-chain/) | Tags that quietly need each other, declared in the wrong order |
+| [legacy-domcontentloaded](examples/legacy-domcontentloaded/) | Why deferring a vendor script silently breaks it |
 
 ## Concepts
 

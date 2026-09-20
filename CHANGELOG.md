@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-20
+
+### Fixed
+
+- `init()` now captures `document.currentScript` before its first `await`
+  rather than after. `currentScript` is only set while a script runs
+  synchronously, so any plugin init action that waits on something genuinely
+  asynchronous would have left it `null` and the `?async=true` ready callback
+  would have silently never fired. No shipped plugin awaits anything today, so
+  this fixes a latent fault rather than an observable one.
+
+### Added
+
+- Runnable examples under `examples/`, and a README section on loading QSL with
+  `async` and the `QSLReady` callback.
+
 ## [0.1.1] - 2026-09-20
 
 ### Fixed
@@ -103,6 +119,7 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Quietsapa/qsl/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Quietsapa/qsl/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Quietsapa/qsl/releases/tag/v0.1.0
