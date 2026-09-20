@@ -6,6 +6,39 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-20
+
+### Fixed
+
+- **The `dynamic` plugin never did anything.** Three faults stacked up. It set
+  a flow to `RUNNING` immediately before handing it to `runFlow()`, which only
+  accepts a `READY` flow and therefore returned at once. Its own flow-id filter
+  then stripped dynamic flows out even when one was requested by name. And
+  above both, `maybeComplete()` returned before reaching any completion hook
+  unless every flow was already `COMPLETED` — which a waiting dynamic flow
+  prevents by definition, so the plugin's hook was unreachable. A process added
+  after `load()` now runs once the regular flows finish, and `load()` resolves
+  instead of hanging.
+- **`hover:` listens for `mouseover` again.** 0.1.0 changed it to `mouseenter`
+  without saying so in this file. `mouseover` bubbles and matches the behaviour
+  the trigger has always had, so the change is reverted rather than documented.
+
+### Changed
+
+- **`completedFlowsActions` hooks now run even when some flow is still
+  outstanding.** They receive `flowsDone` as before and decide for themselves:
+  return `false` to hold completion back, or pass `flowsDone` straight through
+  when there is nothing to defer. With no hooks registered the behaviour is
+  unchanged — a run completes when every flow completes. Any custom hook
+  written against 0.1.0 must now return `flowsDone` rather than `true` in its
+  "nothing to do" branch, or it will complete a run early.
+
+### Added
+
+- Tests covering the `dynamic` plugin, including the case where a late add must
+  wait for the regular flows and the case where it is ignored without the
+  plugin.
+
 ## [0.1.0] - 2026-09-20
 
 First public release. The runtime is extracted from a private codebase, so
@@ -70,5 +103,6 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Quietsapa/qsl/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Quietsapa/qsl/releases/tag/v0.1.0

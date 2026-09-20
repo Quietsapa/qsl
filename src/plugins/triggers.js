@@ -142,7 +142,7 @@ export function delayTrigger(QSL) {
 }
 
 /**
- * `hover:<selector>` - fires when the pointer enters the element.
+ * `hover:<selector>` - fires when the pointer moves over the element.
  * @param {Object} QSL
  */
 export function hoverTrigger(QSL) {
@@ -155,7 +155,7 @@ export function hoverTrigger(QSL) {
                     cb();
                     return;
                 }
-                el.addEventListener('mouseenter', () => cb(), { once: true, passive: true });
+                el.addEventListener('mouseover', () => cb(), { once: true, passive: true });
             });
         };
     });

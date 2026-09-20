@@ -2,7 +2,7 @@ export default {
     /**
      * Constants
      */
-    VERSION: '0.1.0',
+    VERSION: '0.1.1',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
@@ -659,9 +659,14 @@ export default {
          * Check completed flows
          */
         let flowsDone = this.flowOptions.size ? Array.from(this.flowOptions.values()).every(opt => opt.status === this.FLOW_STATE.COMPLETED) : false;
-        if ( ! flowsDone ) return;
 
-        let maybeComplete = true;
+        /**
+         * Completion hooks run even when some flow is still outstanding, so a
+         * plugin can hold work back and release it here. With no hooks
+         * registered this is exactly the old behaviour: done when every flow
+         * is done.
+         */
+        let maybeComplete = flowsDone;
 
         /*
          * Filter maybeComplete by completedFlowsActions

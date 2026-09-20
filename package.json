@@ -1,6 +1,6 @@
 {
   "name": "@quietsapa/qsl",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Dependency-aware orchestration runtime for third-party scripts, styles, pixels and custom elements in the browser.",
   "type": "module",
   "license": "Apache-2.0",

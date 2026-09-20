@@ -214,7 +214,7 @@ Set `trigger` on a process or a flow.
 | `'idle'` | `requestIdleCallback`, falling back to a 200 ms timeout |
 | `'interaction'` or `true` | First click, keydown, wheel, mousedown, mousemove or touchstart |
 | `'delay:2000'` | After the given number of milliseconds |
-| `'hover:<selector>'` | Pointer enters the element |
+| `'hover:<selector>'` | Pointer moves over the element |
 | `'visible:<selector>'` | Element intersects the viewport (`IntersectionObserver`) |
 | `'appears:<selector>'` | Element is inserted into the DOM (`MutationObserver`) |
 | `'media:<query>'` | Media query matches, now or later |

@@ -55,7 +55,7 @@ describe('hover trigger', () => {
         trigger(() => { fired = true; });
 
         await waitFor(() => document.getElementById('first') !== null);
-        document.getElementById('first').dispatchEvent(new Event('mouseenter'));
+        document.getElementById('first').dispatchEvent(new Event('mouseover', { bubbles: true }));
 
         expect(fired).toBe(true);
     });
