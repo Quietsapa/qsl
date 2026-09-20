@@ -2,7 +2,7 @@ export default {
     /**
      * Constants
      */
-    VERSION: '0.1.2',
+    VERSION: '0.1.3',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
