@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-20
+
+### Fixed
+
+- **Two processes sharing an id woke each other's listeners.** The private
+  event the `events` plugin dispatches was named after the process id, and ids
+  are not unique: the same explicit id appears again in a later `load()` cycle,
+  or in a late add that the `dynamic` plugin puts in its own flow. The second
+  process then dispatched an event the first one's listener was still bound to,
+  so that listener ran a second time. The name is now keyed to the process
+  instance. Listeners belonging to one process still share a name, so a single
+  dispatch continues to serve all of them.
+
+### Changed
+
+- **The full browser bundle now registers the `dynamic` plugin.** It was listed
+  in the README alongside the others but built into neither bundle, so for
+  anyone loading QSL from a CDN a process added after `load()` silently did
+  nothing. The bundle grows by about 0.2 kB gzipped. Behaviour changes for
+  those users: a late add now runs once the regular flows finish, where before
+  it was dropped.
+
 ## [0.1.3] - 2026-09-20
 
 ### Fixed
@@ -138,7 +160,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Quietsapa/qsl/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Quietsapa/qsl/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Quietsapa/qsl/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Quietsapa/qsl/compare/v0.1.0...v0.1.1

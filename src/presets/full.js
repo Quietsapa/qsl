@@ -8,6 +8,7 @@ import { loadTrigger, idleTrigger, domReadyTrigger, delayTrigger, hoverTrigger, 
 import logger from '../plugins/logger.js';
 import events from '../plugins/events.js';
 import circ from '../plugins/circ.js';
+import dynamic from '../plugins/dynamic.js';
 
 core
     .registerTypes([Script, InlineScript, InlineStyle, Stylesheet, Pixel, Shadow, HTML])
@@ -15,6 +16,7 @@ core
     .use(logger)
     .use(events)
     .use(circ)
+    .use(dynamic)
 
     .use(mediaQueryCondition)
     .use(languageCondition)

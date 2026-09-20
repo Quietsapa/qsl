@@ -96,7 +96,7 @@ after those events have passed.
 | Build | Entry | Size (gzip) | Contents |
 | --- | --- | --- | --- |
 | `dist/qsl.mjs` | `src/index.js` | — | ESM, nothing registered, nothing started |
-| `dist/qsl.min.js` | `src/presets/full.js` | ~8.3 kB | All types, conditions, triggers, logger, events |
+| `dist/qsl.min.js` | `src/presets/full.js` | ~8.5 kB | All types, conditions, triggers, and the logger, events, circ and dynamic plugins |
 | `dist/qsl.slim.min.js` | `src/presets/default.js` | ~4.4 kB | The `script` type only |
 
 ## Quick start
@@ -129,18 +129,6 @@ With a CDN bundle the registration is already done:
   qsl.load();
 </script>
 ```
-
-## Examples
-
-Runnable pages in [`examples/`](examples/) — open `index.html`, no build step.
-Each one starts with a description of the problem it solves.
-
-| Example | Problem |
-| --- | --- |
-| [consent-groups](examples/consent-groups/) | A cookie banner where the pixel fires on consent but the chat widget still waits for engagement |
-| [embed-on-visible](examples/embed-on-visible/) | A YouTube embed that costs nothing until someone scrolls to it |
-| [dependency-chain](examples/dependency-chain/) | Tags that quietly need each other, declared in the wrong order |
-| [legacy-domcontentloaded](examples/legacy-domcontentloaded/) | Why deferring a vendor script silently breaks it |
 
 ## Concepts
 
@@ -326,6 +314,10 @@ A plugin is a function that receives the instance and registers handlers on it.
 | `circ` | Detects circular dependencies and breaks them |
 | `dynamic` | Defers processes added after `load()` into their own flows |
 | `simple-events` | Re-dispatches `DOMContentLoaded` and `load` globally once everything completes |
+
+Every plugin above except `simple-events` is already registered in the full
+browser bundle. The slim bundle registers none of them. With the ESM entry you
+register what you want yourself:
 
 ```js
 import core, { triggers, conditions, logger } from '@quietsapa/qsl';

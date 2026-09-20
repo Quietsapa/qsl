@@ -2,7 +2,7 @@ export default {
     /**
      * Constants
      */
-    VERSION: '0.1.3',
+    VERSION: '0.1.4',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
@@ -86,6 +86,12 @@ export default {
     async init() {
         if (this.initialized) return this;
 
+        /**
+         * document.currentScript is only set while this script is running
+         * synchronously. Capture it before the first await below: an init
+         * action that waits on anything real would otherwise leave it null,
+         * and the async ready callback would silently never fire.
+         */
         const loaderScript = document.currentScript;
 
         /* Check if QSL is already initialized */

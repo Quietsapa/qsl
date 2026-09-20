@@ -5,6 +5,7 @@
 export default function(QSL) {
     const customEvents = new Map();
     const processElementMap = new WeakMap();
+    let processCounter = 0;
     let documentListener = null;
     let windowListener = null;
     let isIntercepting = false;
@@ -21,6 +22,26 @@ export default function(QSL) {
         } catch (e) {
             return u.split('?')[0].split('#')[0];
         }
+    };
+
+    /**
+     * A key that is unique to this process OBJECT, not to its id.
+     *
+     * Ids are not unique: the same explicit id can be used by a process in a
+     * later load() cycle, or by a late add that the dynamic plugin puts in its
+     * own flow. Keying the private event name on the id alone means the second
+     * process dispatches an event the first process's listener is still bound
+     * to, and that listener runs again. Every listener from one process shares
+     * this key, so one dispatch still serves all of them.
+     *
+     * @param {Object} process
+     * @returns {string}
+     */
+    const processKey = (process) => {
+        if (!process._eventKey) {
+            process._eventKey = process.id + '#' + (++processCounter);
+        }
+        return process._eventKey;
     };
 
     /**
@@ -124,9 +145,10 @@ export default function(QSL) {
                 if (process) {
                     const shouldFireEvents = process.fireEvents !== false && (this.flowOptions.get(targetFlowId)?.fireEvents !== false);
                     if (shouldFireEvents) {
-                        const eventName = `${type}:${process.id}`;
-                        if (!customEvents.has(process.id)) customEvents.set(process.id, []);
-                        const events = customEvents.get(process.id);
+                        const key = processKey(process);
+                        const eventName = `${type}:${key}`;
+                        if (!customEvents.has(key)) customEvents.set(key, []);
+                        const events = customEvents.get(key);
                         if (!events.some(e => e.name === eventName)) events.push({ type: eventType, name: eventName });
                         if (changeEventName) type = eventName;
                     }
@@ -175,7 +197,7 @@ export default function(QSL) {
      * Use processCompleteActions instead of patching execute.
      */
     QSL.processCompleteActions.add(function(process) {
-        const events = customEvents.get(process.id);
+        const events = customEvents.get(process._eventKey);
         if (events && Array.isArray(events)) {
             for (const event of events) {
                 if (event.type === this.EVENTS.DOMREADY) {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { freshCore } from './helpers.js';
 import events from '../src/plugins/events.js';
+import dynamic from '../src/plugins/dynamic.js';
 
 /**
  * The events plugin gives a late-loading process its own DOMContentLoaded and
@@ -88,6 +89,69 @@ describe('events plugin', () => {
         await core.load();
 
         expect(hits.sort()).toEqual(['listener-0', 'listener-1']);
+    });
+
+    it('keeps two processes with the same id from waking each other', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+
+        const hits = [];
+
+        /* Ids are not unique: the same explicit id can be reused in a later
+           run. The first run's listener must not fire again in the second. */
+        core.registerType('vendor', (process, callbacks) => {
+            const element = document.createElement('script');
+            callbacks.registerProcessElement?.(element, process);
+            Object.defineProperty(document, 'currentScript', {
+                value: element,
+                configurable: true,
+            });
+            const tag = process.tag;
+            document.addEventListener('DOMContentLoaded', () => hits.push(tag));
+            delete document.currentScript;
+            return Promise.resolve();
+        });
+
+        core.add({ id: 'vendor', type: 'vendor', tag: 'first-run' });
+        await core.load();
+
+        core.add({ id: 'vendor', type: 'vendor', tag: 'second-run' });
+        await core.load();
+
+        expect(hits).toEqual(['first-run', 'second-run']);
+    });
+
+    it('keeps a late add with a reused id from waking the earlier process', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.use(dynamic);
+        core.LIFECYCLE.DOMREADY = true;
+
+        const hits = [];
+
+        core.registerType('vendor', (process, callbacks) => {
+            const element = document.createElement('script');
+            callbacks.registerProcessElement?.(element, process);
+            Object.defineProperty(document, 'currentScript', {
+                value: element,
+                configurable: true,
+            });
+            const tag = process.tag;
+            document.addEventListener('DOMContentLoaded', () => hits.push(tag));
+            delete document.currentScript;
+            return new Promise((resolve) => setTimeout(resolve, process.wait || 0));
+        });
+
+        core.add({ id: 'vendor', type: 'vendor', tag: 'early', wait: 120 });
+        const loading = core.load();
+
+        await new Promise((r) => setTimeout(r, 40));
+        core.add({ id: 'vendor', type: 'vendor', tag: 'late' });
+
+        await loading;
+
+        expect(hits).toEqual(['early', 'late']);
     });
 
     it('leaves listeners it cannot attribute to a process alone', async () => {
