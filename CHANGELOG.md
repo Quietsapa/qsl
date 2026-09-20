@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-20
+
+### Fixed
+
+- **The `events` plugin delivered each intercepted event more than once.** It
+  dispatched the renamed `DOMContentLoaded` / `load` event in two places: a
+  microtask queued from the patched `addEventListener`, and again when the
+  process completed. A vendor script with one listener saw it fire twice; with
+  three listeners, each fired four times, because the microtask was queued once
+  per registration while the completion dispatch fired once in total. For a
+  real tag that means duplicate page views, duplicate widgets and duplicate
+  conversions. The rename still happens at registration, but the event is now
+  dispatched only on process completion, which is the path that deduplicates.
+
+### Added
+
+- Tests covering the `events` plugin, including the multiple-listener case that
+  the duplicate dispatch made worst.
+
 ## [0.1.2] - 2026-09-20
 
 ### Fixed
@@ -19,8 +38,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- Runnable examples under `examples/`, and a README section on loading QSL with
-  `async` and the `QSLReady` callback.
+- A README section on loading QSL with `async` and the `QSLReady` callback,
+  including why the callback is needed and the three ways to get it wrong.
 
 ## [0.1.1] - 2026-09-20
 
@@ -119,7 +138,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Quietsapa/qsl/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Quietsapa/qsl/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Quietsapa/qsl/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Quietsapa/qsl/releases/tag/v0.1.0

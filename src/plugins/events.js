@@ -137,22 +137,22 @@ export default function(QSL) {
 
         document.addEventListener = (type, listener, opts) => {
             if (type === 'DOMContentLoaded' && this.LIFECYCLE.DOMREADY) {
-                const trackedType = iterator.call(this, type, this.EVENTS.DOMREADY, true);
-                if (trackedType !== type) {
-                    type = trackedType;
-                    queueMicrotask(() => document.dispatchEvent(new Event(trackedType)));
-                }
+                /**
+                 * Only rename here. The renamed event is dispatched once, when
+                 * the process completes (see processCompleteActions below).
+                 * Dispatching here as well would deliver it twice, and a vendor
+                 * that registers two listeners would see every one of them fire
+                 * once per registration on top of that.
+                 */
+                type = iterator.call(this, type, this.EVENTS.DOMREADY, true);
             }
             return documentListener.call(document, type, listener, opts);
         };
 
         window.addEventListener = (type, listener, opts) => {
             if (type === 'load' && this.LIFECYCLE.LOADED) {
-                const trackedType = iterator.call(this, type, this.EVENTS.LOADED, true);
-                if (trackedType !== type) {
-                    type = trackedType;
-                    queueMicrotask(() => window.dispatchEvent(new Event(trackedType)));
-                }
+                /* Same as above: rename now, dispatch once on completion. */
+                type = iterator.call(this, type, this.EVENTS.LOADED, true);
             }
             return windowListener.call(window, type, listener, opts);
         };
