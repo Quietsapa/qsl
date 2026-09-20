@@ -1,0 +1,70 @@
+{
+  "name": "@quietsapa/qsl",
+  "version": "0.1.0",
+  "description": "Dependency-aware orchestration runtime for third-party scripts, styles, pixels and custom elements in the browser.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "./dist/qsl.mjs",
+  "module": "./dist/qsl.mjs",
+  "browser": "./dist/qsl.min.js",
+  "unpkg": "./dist/qsl.min.js",
+  "jsdelivr": "./dist/qsl.min.js",
+  "exports": {
+    ".": {
+      "import": "./dist/qsl.mjs",
+      "default": "./dist/qsl.mjs"
+    },
+    "./browser": "./dist/qsl.min.js",
+    "./browser/slim": "./dist/qsl.slim.min.js",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": [
+    "./src/presets/*.js",
+    "./dist/*.min.js"
+  ],
+  "scripts": {
+    "build": "vite build --mode esm && vite build --mode browser && vite build --mode browser-slim",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:version": "node scripts/check-version.js",
+    "prepublishOnly": "npm run check:version && npm test && npm run build"
+  },
+  "devDependencies": {
+    "happy-dom": "^15.11.0",
+    "terser": "^5.36.0",
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "script-loader",
+    "tag-manager",
+    "third-party-scripts",
+    "performance",
+    "lazy-loading",
+    "orchestration",
+    "feature-flags"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Quietsapa/qsl.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Quietsapa/qsl/issues"
+  },
+  "homepage": "https://github.com/Quietsapa/qsl#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}
