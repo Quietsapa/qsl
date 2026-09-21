@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>QSL e2e fixture — modules</title>
+<!--
+  Not an example: a fixture for scripts/e2e.mjs. A module is a plain
+  <script type="module">, run by the browser as it would run any other; this
+  pins down what that means for a process.
+-->
+</head>
+<body>
+<script src="/dist/qsl.min.js"></script>
+<script>
+  var qsl = window.__QSL__;
+  window.outcomes = {};
+  qsl.useEvents();
+  ['completed', 'error'].forEach(function (name) {
+    window.addEventListener('QSL:' + name, function (e) {
+      window.outcomes[e.detail.id.replace(/^qsl-/, '')] = name;
+    });
+  });
+
+  function inline(id, code) {
+    qsl.add({ id: id, type: 'inline-script', module: true, code: code }, id);
+  }
+
+  /**
+   * Relative imports resolve against the page, as for any inline module.
+   */
+  inline('relative', "import v from './dep.js'; window.relative = v;");
+  inline('nested', "import { c } from './lib/c.js'; window.nested = c;");
+  inline('parent', "import v from '../shared.js'; window.parent_ = v;");
+  inline('root', "import v from '/scripts/fixtures/shared.js'; window.root = v;");
+  inline('await', 'await new Promise(function (r) { setTimeout(r, 200); }); window.awaited = 1;');
+
+  /**
+   * A module script completes on the browser's load event, which comes
+   * before a top-level await is done, and even when the module throws.
+   */
+  qsl.add({ id: 'external', type: 'script', module: true, src: './ext-await.js' }, 'external');
+  qsl.add({ id: 'external-throws', type: 'script', module: true, src: './bad.js' }, 'external-throws');
+
+  qsl.autoReset = false;
+  qsl.load().then(function () {
+    window.done = true;
+    window.atDone = { awaited: window.awaited, externalAwaited: window.externalAwaited };
+  });
+</script>
+</body>
+</html>

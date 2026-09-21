@@ -18,6 +18,11 @@ export default defineConfig({
             },
         },
         include: ['tests/**/*.test.js'],
+        /**
+         * happy-dom has no scheduler.yield(). QSL_SCHEDULER=1 adds one, so
+         * the same suite also runs the way Chromium and Firefox do.
+         */
+        setupFiles: process.env.QSL_SCHEDULER ? ['./tests/setup/scheduler.js'] : [],
         restoreMocks: true,
         coverage: {
             provider: 'v8',

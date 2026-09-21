@@ -6,13 +6,6 @@ const bypassSuffix = (source, bypassCache) =>{
 }
 
 /**
- * Log a message.
- */
-const log = (detail) => {
-    window.dispatchEvent(new CustomEvent('QSL:log', { detail }));
-}
-
-/**
  * Resolve the process, then run its onComplete. An onComplete that throws is
  * rethrown on its own tick: it shows up as an uncaught error, but it cannot
  * leave the process unsettled or be mistaken for a load failure.
@@ -27,6 +20,12 @@ const complete = (resolve, onComplete) => {
 }
 
 /**
+ * Complete a process as soon as its element is inserted, for elements that
+ * load nothing: inline code, styles, markup.
+ */
+const inserted = ({ config, resolve }) => complete(resolve, config.onComplete);
+
+/**
  * Render an element.
  */
 const render = (config, callbacks = {}) => {
@@ -38,7 +37,6 @@ const render = (config, callbacks = {}) => {
         }
         try {
             if (onBeforeStart) await onBeforeStart(config);
-            log({ tag, type: 'PROCESS_STARTED', config });
             if (delay) await new Promise(res => setTimeout(res, delay));
             let el = document.createElement(tag);
             onElement?.(el, config);
@@ -53,11 +51,15 @@ const render = (config, callbacks = {}) => {
 
             if (!onCustomResolve) {
                 el.onload = () => {
-                    log({ tag, type: 'PROCESS_COMPLETED', config });
                     complete(resolve, onComplete);
                 };
             }
             el.onerror = (e) => {
+                /**
+                 * Another attempt follows: take the failed element out so
+                 * that the page does not collect them.
+                 */
+                if (callbacks.retrying) el.remove();
                 onError?.(e);
                 reject(e);
             };
@@ -77,56 +79,22 @@ const render = (config, callbacks = {}) => {
  */
 const InlineScript = {
     type: 'inline-script',
-    handler: (config, callbacks) => {      
-        let storedResolve = null;
-        let alreadyFired = false;
-        const eventName = `QSL:inline-script:completed:${config.id}`;
-        const resolveProcess = () => {
-            log({ tag: 'inline-script', type: 'INLINE_SCRIPT_SUCCESS', config });
-            log({ tag: 'inline-script', type: 'PROCESS_COMPLETED', config });
-            complete(storedResolve, config?.onComplete);
-        };
-        const normalizedConfig = {
-            ...config,
-            code: config.code?.replace(/<script.*?>|<\/script>/gi, '')
-        };
+    handler: (config, callbacks) => {
         return render({
-            ...normalizedConfig,
+            ...config,
+            code: config.code?.replace(/<script.*?>|<\/script>/gi, ''),
             tag: 'script',
             dom: true,
-            onElement: (el, config) => {
-                const { code, module, id, flowId } = config;
+            onElement: (el, { code, module }) => {
+                if (module) el.type = 'module';
                 if (code) el.textContent = code;
-                if (module) {
-                    el.type = 'module';
-                    const originalCode = el.textContent;
-                    const fid = JSON.stringify(String(flowId));
-                    const pid = JSON.stringify(String(id));
-                    const evt = JSON.stringify(String(eventName));
-                    const wrappedCode = `(function(){window.__QSL__.currentProcessPerFlow.set(${fid},${pid});try{${originalCode}}finally{window.__QSL__.currentProcessPerFlow.delete(${fid});window.dispatchEvent(new Event(${evt}));}})();`;
-                    el.textContent = wrappedCode;
-                    const handler = () => {
-                        window.removeEventListener(eventName, handler);
-                        if (storedResolve) {
-                            resolveProcess();
-                        } else { 
-                            alreadyFired = true;
-                        }
-                    };
-                    window.addEventListener(eventName, handler);
-                }
             },
-            onCustomResolve: ({ el, config, resolve }) => {
-                const { module } = config;
-                storedResolve = resolve;
-                if (module && alreadyFired) {
-                    resolveProcess();
-                } else if (!module) {
-                    queueMicrotask(() => {
-                        if (storedResolve === resolve) resolveProcess();
-                    });
-                }
-            }
+            /**
+             * A classic inline script has run by then, synchronously. A
+             * module runs later, on its own schedule, and reports nothing
+             * when it has: QSL does not wait for it.
+             */
+            onCustomResolve: inserted
         }, callbacks);
     }
 };
@@ -141,8 +109,9 @@ const Script = {
             ...config,
             tag: 'script',
             dom: true,
-            onElement: (el, { src, module, async, defer, crossOrigin, integrity, bypassCache }) => {
+            onElement: (el, { src, module, async, defer, crossOrigin, integrity, fetchPriority, bypassCache }) => {
                 if (module) el.type = 'module';
+                if (fetchPriority) el.setAttribute('fetchpriority', fetchPriority);
                 if (async) el.async = async;
                 if (defer) el.defer = defer;
                 if (crossOrigin) el.crossOrigin = crossOrigin;
@@ -170,12 +139,7 @@ const InlineStyle = {
             onElement: (el, { code }) => {
                 if (code) el.textContent = code;
             },
-            onCustomResolve: ({ el, config, resolve }) => {
-                const { tag, onComplete } = config;
-                log({ tag, type: 'INLINE_STYLE_SUCCESS', config });
-                log({ tag, type: 'PROCESS_COMPLETED', config });
-                complete(resolve, onComplete);
-            }
+            onCustomResolve: inserted
         }, callbacks);
     }
 };
@@ -190,8 +154,9 @@ const Stylesheet = {
             ...config,
             tag: 'link',
             dom: true,
-            onElement: (el, { href, crossOrigin, bypassCache }) => {
+            onElement: (el, { href, crossOrigin, fetchPriority, bypassCache }) => {
                 el.rel = 'stylesheet';
+                if (fetchPriority) el.setAttribute('fetchpriority', fetchPriority);
                 if (crossOrigin) el.crossOrigin = crossOrigin;
                 el.href = href + bypassSuffix(href, bypassCache);
             }
@@ -214,7 +179,8 @@ const Pixel = {
              * still reports load or error.
              */
             dom: config.dom !== false,
-            onElement: (el, { style = { display: 'none' }, src, bypassCache }) => {
+            onElement: (el, { style = { display: 'none' }, src, fetchPriority, bypassCache }) => {
+                if (fetchPriority) el.setAttribute('fetchpriority', fetchPriority);
                 el.src = src + bypassSuffix(src, bypassCache);
                 el.width = 1;
                 el.height = 1;
@@ -223,14 +189,6 @@ const Pixel = {
                         el.style.setProperty(key, value);
                     }
                 }
-            },
-            onCustomResolve: ({ el, config, resolve }) => {
-                const { tag, onComplete } = config;
-                el.onload = () => {
-                    log({ tag, type: 'IMAGE_LOADED', config });
-                    log({ tag, type: 'PROCESS_COMPLETED', config });
-                    complete(resolve, onComplete);
-                };
             }
         }, callbacks);
     }
@@ -250,7 +208,7 @@ const Shadow = {
                 if (shadowData?.hidden) el.setAttribute('hidden', '');    
             },
             onCustomResolve: ({ el, config, resolve, reject }) => {
-                const { tag, shadowData, onComplete, onError } = config;
+                const { shadowData, onComplete, onError } = config;
                 const resolver = () => {
                     const selector = shadowData?.container;
                     let container = null;
@@ -270,8 +228,6 @@ const Shadow = {
                         return;
                     }
                     shadowData?.position === 'top' ? container.insertBefore(el, container.firstChild) : container.appendChild(el);
-                    log({ tag, type: 'SHADOW_SUCCESS', config });
-                    log({ tag, type: 'PROCESS_COMPLETED', config });
                     complete(resolve, onComplete);
                 };
                 if (document.readyState === 'interactive' || document.readyState === 'complete') {
@@ -303,12 +259,7 @@ const HTML = {
                     }
                 }
             },
-            onCustomResolve: ({ el, config, resolve }) => {
-                const { tag, onComplete } = config;
-                log({ tag, type: 'HTML_SUCCESS', config });
-                log({ tag, type: 'PROCESS_COMPLETED', config });
-                complete(resolve, onComplete);
-            }
+            onCustomResolve: inserted
         }, callbacks);
     }
 };

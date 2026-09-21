@@ -276,6 +276,19 @@ describe('preload', () => {
         expect(link).not.toBeNull();
         expect(link.getAttribute('as')).toBe('style');
     });
+
+    it('passes fetchPriority on to the preload link', async () => {
+        const core = await freshCore();
+        core.registerType('script', () => Promise.resolve());
+
+        core.setFlowOptions({ preload: true }, 'js');
+        core.add({ id: 'low', type: 'script', src: '/low.js', fetchPriority: 'low' }, 'js');
+        core.add({ id: 'plain', type: 'script', src: '/plain.js' }, 'js');
+        await within(core.load());
+
+        expect(document.querySelector('link[href="/low.js"]').getAttribute('fetchpriority')).toBe('low');
+        expect(document.querySelector('link[href="/plain.js"]').hasAttribute('fetchpriority')).toBe(false);
+    });
 });
 
 describe('process conditions', () => {

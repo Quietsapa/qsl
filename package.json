@@ -1,7 +1,7 @@
 {
   "name": "@quietsapa/qsl",
-  "version": "0.2.1",
-  "description": "Dependency-aware orchestration runtime for third-party scripts, styles, pixels and custom elements in the browser.",
+  "version": "0.3.0",
+  "description": "A modern orchestrator for the third-party code that has to live in the browser. Scripts, styles, pixels and custom elements, with dependencies, triggers, conditions and timeouts.",
   "type": "module",
   "license": "Apache-2.0",
   "main": "./dist/qsl.mjs",
@@ -36,6 +36,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:scheduler": "QSL_SCHEDULER=1 vitest run",
     "test:e2e": "node scripts/e2e.mjs",
     "check:version": "node scripts/check-version.js",
     "check:size": "node scripts/check-size.js",

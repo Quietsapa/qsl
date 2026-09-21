@@ -6,6 +6,85 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-22
+
+### Added
+
+- **`timeout`**: how long a process may take once it starts loading, in
+  milliseconds. A resource that stalls — no `load`, no `error`, as with a hung
+  connection — used to hold the whole run open, and `load()` with it. Now the
+  process fails with a `TimeoutError`: `onError` is called, `QSL:error` fires,
+  `strict` dependents skip and the flow's outcome is `failed`. Waiting for a
+  trigger or for dependencies does not count against it. Set it on a process,
+  on a flow or on the instance (`qsl.timeout`); the nearest setting wins, and
+  `0` turns it off. No timeout by default.
+- **`retries`**: how many more times a failed load is attempted before the
+  process fails. `0` by default; set it on a process, a flow or the instance
+  (`qsl.retries`). `onError` and `QSL:error` come once, for the final outcome,
+  each retry is logged as `PROCESS_RETRY`, and the built-in types remove the
+  failed element before the next attempt. With a `timeout`, the limit covers
+  all attempts together, and an attempt that timed out is never retried, so a
+  late script cannot end up running twice. Types see `callbacks.retrying`
+  during an attempt that another one may follow.
+- **`fetchPriority`** on `script`, `stylesheet` and `pixel`: `'high'`,
+  `'low'` or `'auto'`, set as the `fetchpriority` attribute and carried over
+  to the preload link of a flow with `preload`.
+- **Yielding to the main thread.** Before each process runs, QSL now calls
+  `scheduler.yield()` where the browser has it (Chrome and Edge 129+,
+  Firefox 142+). Processes released together — a flow starting, a
+  dependency settling, the next step of an ordered chain — used to run in
+  one task; ten inline scripts of 30 ms each made a 300 ms long task, and a
+  click during it waited about 270 ms. Now each runs as its own task and the
+  click waits about 25 ms, at a cost of a few milliseconds in total. External
+  scripts are unaffected, as the browser already runs each in its own task.
+  Browsers without `scheduler.yield()` behave as before, with no fallback.
+  On by default; `qsl.yield = false` turns it off.
+- `npm run test:scheduler` runs the suite with a `scheduler.yield()` in place,
+  since happy-dom has none.
+- Late flows also inherit `timeout` and `retries` from the flow they were
+  added to.
+
+### Changed
+
+- `LIFECYCLE.DOMREADY` starts as `false`, like `LOADED`, and both are set by
+  `init()`, rather than one of them being read once when the module loads.
+- A tagline for what QSL is: "A modern orchestrator for the third-party code
+  that has to live in the browser", at the top of the README and in the npm
+  description.
+- The examples load the latest QSL from jsDelivr, with no version in the URL,
+  so they always show the current release. Every example links back to the
+  start page.
+
+### Removed
+
+- The `QSL:log` window event. Types dispatched it on every step of every
+  process, whether a logger was attached or not, for the core to pass on to
+  the logger. The core now logs `PROCESS_STARTED` and `PROCESS_COMPLETED`
+  itself, and types no longer log. The per-type messages (`IMAGE_LOADED`,
+  `HTML_SUCCESS` and the like), which repeated `PROCESS_COMPLETED`, are gone
+  from the logger, together with keys nothing ever sent.
+- `currentProcessPerFlow`, which only served the inline module wrapper.
+- The undocumented `prefetch` flow option. `preload` stays.
+
+### Fixed
+
+- **Inline modules with `import` or top-level `await`.** An `inline-script`
+  with `module: true` was wrapped in a function to report its completion, and
+  `import` and top-level `await` are only valid at the top level of a module:
+  the code failed with a syntax error, and without a `timeout` the process,
+  and `load()` with it, waited forever. A module is now a plain
+  `<script type="module">` that the browser runs as it is; an inline one
+  completes as soon as it is inserted.
+- **`strict` in `ordered` flows.** The order is a chain of dependencies, but
+  `strict` only looked at `depends`, so it had no effect on the order: when a
+  process failed, the next one ran anyway, and a script that timed out still
+  executed later, after the ones meant to follow it. In a strict ordered flow
+  each process now depends on the one before it. After a failure or a
+  timeout, the rest of the chain is skipped with `reason: 'dependency'` and
+  the flow's outcome is `failed`. A process skipped by its own `condition`
+  does not break the chain, and `strict: false` on a single process lets it
+  run after a failure. Ordered flows are still not strict unless you set it.
+
 ## [0.2.1] - 2026-09-21
 
 No change to the runtime: `src/` is the same as in 0.2.0. This release is
@@ -378,7 +457,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Quietsapa/qsl/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Quietsapa/qsl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Quietsapa/qsl/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Quietsapa/qsl/compare/v0.1.4...v0.1.5

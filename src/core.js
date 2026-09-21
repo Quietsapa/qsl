@@ -2,7 +2,7 @@ export default {
     /**
      * Constants
      */
-    VERSION: '0.2.1',
+    VERSION: '0.3.0',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
@@ -36,8 +36,11 @@ export default {
         DOMREADY: 'QSL:domready',
         LOADED: 'QSL:loaded',
     },
+    /**
+     * Whether DOMContentLoaded and load have fired, kept up to date from init().
+     */
     LIFECYCLE: {
-        DOMREADY: document.readyState === 'interactive' || document.readyState === 'complete',
+        DOMREADY: false,
         LOADED: false,
     },
     CALLBACK: 'QSLReady',
@@ -48,7 +51,6 @@ export default {
     flows: new Map(), // Map to store flows
     flowOptions: new Map(), // Map to store flow options
     flowGroups: new Map(), // Map to store flow groups
-    currentProcessPerFlow: new Map(), // Map to store current process per flow (flowId -> processId)
 
     pendingFlows: new Set(), // Set to store pending flows
     waitingFlows: new Set(), // Flows whose trigger is armed and has not fired yet
@@ -79,6 +81,9 @@ export default {
     completing: false, // Flag to check if QSL is completing
     autoReset: true, // Whether reset() runs automatically once every flow completes
     strict: false, // Default for `strict`: skip dependents of a failed or skipped dependency
+    timeout: 0, // Default for `timeout`: ms a process may take to load before it fails, 0 for no limit
+    retries: 0, // Default for `retries`: how many more times a failed load is attempted
+    yield: true, // Yield to the main thread before each process runs, where scheduler.yield() exists
 
     globalBetween: 0, // Global delay between processes
 
@@ -127,14 +132,6 @@ export default {
                 }, process.delay || 0);
             });
         });
-
-        /**
-         * Custom event listeners for logging and error handling
-         */
-        if (!this.logListener) {
-            this.logListener = (e) => this.log(e.detail.type, e.detail.config.id);
-            window.addEventListener('QSL:log', this.logListener);
-        }
 
         /**
          * Load init triggers
@@ -244,7 +241,7 @@ export default {
                 if (options && options.status !== this.FLOW_STATE.READY) {
                     const lateId = fid + '+late-' + Math.random().toString(36).slice(2);
                     const inherited = {};
-                    for (const key of ['condition', 'strict', 'fireEvents', 'group']) {
+                    for (const key of ['condition', 'strict', 'timeout', 'retries', 'fireEvents', 'group']) {
                         if (options[key] != null) inherited[key] = options[key];
                     }
                     this.setFlowOptions(inherited, lateId);
@@ -345,7 +342,6 @@ export default {
         this.completedProcesses.clear();
         this.failedProcesses.clear();
         this.skippedProcesses.clear();
-        this.currentProcessPerFlow.clear();
         this.onAllComplete = null;
         this.globalResolve = null;
         this.hasStarted = false;
@@ -497,6 +493,7 @@ export default {
             this.log('PROCESS_SKIPPED', process.id, process.skipReason || null);
             this.fire('SKIPPED', { ...process, id: process.id, reason: process.skipReason || null });
         } else {
+            this.log('PROCESS_COMPLETED', process.id);
             this.fire('COMPLETED', { ...process, id: process.id });
         }
 
@@ -838,17 +835,49 @@ export default {
     },
 
     /**
+     * A per-process setting: the process's own value wins, then its flow's,
+     * then the instance default.
+     *
+     * @param {Object} process
+     * @param {string} key - 'strict', 'timeout' or 'retries'.
+     * @returns {*}
+     */
+    setting(process, key) {
+        if (process[key] != null) return process[key];
+        const flowValue = this.flowOptions.get(process.flowId)?.[key];
+        return flowValue != null ? flowValue : this[key];
+    },
+
+    /**
+     * How long a process may take once it starts loading; 0 means no limit.
+     *
+     * @param {Object} process
+     * @returns {number} Milliseconds, or 0.
+     */
+    timeoutFor(process) {
+        const timeout = this.setting(process, 'timeout');
+        return typeof timeout === 'number' && timeout > 0 ? timeout : 0;
+    },
+
+    /**
+     * How many more times a failed load is attempted.
+     *
+     * @param {Object} process
+     * @returns {number}
+     */
+    retriesFor(process) {
+        const retries = this.setting(process, 'retries');
+        return typeof retries === 'number' && retries > 0 ? Math.floor(retries) : 0;
+    },
+
+    /**
      * Whether a process skips itself when a dependency failed or was skipped.
-     * Process setting wins, then its flow's, then the instance default.
      *
      * @param {Object} process
      * @returns {boolean}
      */
     isStrict(process) {
-        if (process.strict != null) return process.strict === true;
-        const flowStrict = this.flowOptions.get(process.flowId)?.strict;
-        if (flowStrict != null) return flowStrict === true;
-        return this.strict === true;
+        return this.setting(process, 'strict') === true;
     },
 
     /**
@@ -1131,16 +1160,17 @@ export default {
                 /**
                  * Preload scripts / styles
                  */
-                if ( (options.preload || options.prefetch ) && ! options.trigger ) {
+                if ( options.preload && ! options.trigger ) {
                     for (const p of processes) {
                         if (p.trigger) continue;
                         if ((p.type === 'script' && p.src) || (p.type === 'stylesheet' && p.href)) {
                             try {
                                 const link = document.createElement('link');
-                                link.rel = options.preload ? 'preload' : 'prefetch';
+                                link.rel = 'preload';
                                 link.href = p.src || p.href;
                                 link.as = p.type === 'script' ? 'script' : 'style';
                                 if (p.crossOrigin) link.crossOrigin = p.crossOrigin;
+                                if (p.fetchPriority) link.setAttribute('fetchpriority', p.fetchPriority);
                                 document.head.appendChild(link);
                             } catch (e) {
                                 this.error('PRELOAD_ERROR', e, p.id);
@@ -1155,13 +1185,27 @@ export default {
                     
                 if (options.ordered) {
                     /**
-                     * Ordered: await previous process
+                     * Ordered: await previous process. For `strict`, each
+                     * process depends on the one before it. run() never
+                     * rejects, a failure settles the process instead, so
+                     * the chain is broken here: once a process failed or
+                     * was skipped for a dependency, strict processes after
+                     * it skip too. A skip by condition is a deliberate step
+                     * and passes the previous state on.
                      */
                     let prev = Promise.resolve();
+                    let broken = false;
                     processes.forEach((process, idx) => {
                         prev = prev.then(async () => {
-                            if (idx > 0 && between) await new Promise(res => setTimeout(res, between));
+                            if (broken && this.isStrict(process)) {
+                                process.skipped = true;
+                                process.skipReason = 'dependency';
+                            } else if (idx > 0 && between) {
+                                await new Promise(res => setTimeout(res, between));
+                            }
                             await this.run(process);
+                            if (this.failedProcesses.has(process.id)) broken = true;
+                            else if (process.skipReason !== 'condition') broken = process.skipReason === 'dependency';
                         });
                     });
                     await prev;
@@ -1281,6 +1325,15 @@ export default {
             process.skipped = true;
             process.skipReason = 'condition';
         }
+
+        /**
+         * Give the main thread back before running: processes released
+         * together (a flow starting, a dependency settling, the next in an
+         * ordered chain) then run as separate tasks instead of one long
+         * one, and input in between is handled at once. Where the browser
+         * has no scheduler.yield() nothing changes.
+         */
+        if (this.yield && !process.skipped && globalThis.scheduler?.yield) await scheduler.yield();
 
         return this.execute(process);
     },
@@ -1434,6 +1487,7 @@ export default {
             this.checkPendingProcesses();
             return;
         }
+        this.log('PROCESS_STARTED', process.id);
         this.fire('STARTED', { ...process, id: process.id });
         
         /**
@@ -1451,18 +1505,62 @@ export default {
             }
         }
         
-        /**
-         * Execute handler and handle completion or error
-         */
+        const timeout = this.timeoutFor(process);
+        let timedOut = false;
+
         /**
          * Through a promise, so a handler that throws or returns something
          * other than a promise still settles the process.
+         *
+         * A failed attempt is retried while `retries` allow and the timeout
+         * has not run out: the timeout is the budget for all attempts
+         * together, and a timed-out attempt is never retried, since its
+         * resource may still arrive and run. Attempts before the last get
+         * a copy without onError, so onError fires once, for the outcome,
+         * and `callbacks.retrying` tells the type to clean up after itself.
          */
-        return Promise.resolve()
-            .then(() => handler(process, callbacks))
+        const retries = this.retriesFor(process);
+        const attempt = (n) => {
+            const last = n >= retries;
+            return Promise.resolve()
+                .then(() => last
+                    ? handler(process, callbacks)
+                    : handler({ ...process, onError: null }, { ...callbacks, retrying: true }))
+                .catch((error) => {
+                    if (last || timedOut) throw error;
+                    this.log('PROCESS_RETRY', process.id, n + 1);
+                    return attempt(n + 1);
+                });
+        };
+        let work = attempt(0);
+
+        /**
+         * A timeout races the handler. A request already sent cannot be
+         * recalled: if the resource arrives later it still runs, but the
+         * process has settled as failed and stays that way.
+         */
+        if (timeout) {
+            let timer;
+            const expiry = new Promise((_, reject) => {
+                timer = setTimeout(() => {
+                    const error = new Error(`Timed out after ${timeout} ms`);
+                    error.name = 'TimeoutError';
+                    timedOut = true;
+                    reject(error);
+                }, timeout);
+            });
+            work = Promise.race([work, expiry]).finally(() => clearTimeout(timer));
+        }
+
+        return work
             .then(() => this.settle(process, 'completed'))
             .catch((error) => {
-                this.error('PROCESS_FAILED', process.id, error);
+                if (error && error.name === 'TimeoutError') {
+                    this.error('PROCESS_TIMEOUT', process.id, timeout);
+                    if (typeof process.onError === 'function') this.callback(() => process.onError(error), process.id);
+                } else {
+                    this.error('PROCESS_FAILED', process.id, error);
+                }
                 this.settle(process, 'failed', error);
             })
             .then(() => this.checkPendingProcesses());

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { freshCore } from './helpers.js';
+import { Pixel, InlineScript } from '../src/types.js';
 
 describe('registerType / registerTypes', () => {
     it('keeps the instance chainable even for invalid input', async () => {
@@ -152,5 +153,54 @@ describe('reset and destroy', () => {
         await core.load();
 
         expect(core.flows.has('kept')).toBe(true);
+    });
+});
+
+describe('page lifecycle', () => {
+    it('starts unknown and is read from the page by init()', async () => {
+        vi.resetModules();
+        const core = (await import('../src/core.js')).default;
+        expect(core.LIFECYCLE).toEqual({ DOMREADY: false, LOADED: false });
+
+        await core.init();
+        expect(document.readyState).toBe('complete');
+        expect(core.LIFECYCLE).toEqual({ DOMREADY: true, LOADED: true });
+    });
+
+    it('follows the page when init() runs while it is still loading', async () => {
+        vi.resetModules();
+        const core = (await import('../src/core.js')).default;
+        Object.defineProperty(document, 'readyState', { value: 'loading', configurable: true });
+        try {
+            await core.init();
+        } finally {
+            delete document.readyState;
+        }
+        expect(core.LIFECYCLE).toEqual({ DOMREADY: false, LOADED: false });
+
+        document.dispatchEvent(new Event('DOMContentLoaded'));
+        expect(core.LIFECYCLE).toEqual({ DOMREADY: true, LOADED: false });
+
+        window.dispatchEvent(new Event('load'));
+        expect(core.LIFECYCLE.LOADED).toBe(true);
+    });
+});
+
+describe('logging', () => {
+    it('logs the start and the completion of each process from the core, with no window events', async () => {
+        const core = await freshCore();
+        core.registerTypes([Pixel, InlineScript]);
+        const lines = [];
+        core.setLogger({ log: (type, id) => lines.push([type, id]), error: () => {} });
+        const seen = vi.fn();
+        window.addEventListener('QSL:log', seen);
+
+        core.add({ id: 'code', type: 'inline-script', code: 'void 0;' });
+        await core.load();
+        window.removeEventListener('QSL:log', seen);
+
+        const own = lines.filter(([, id]) => id === 'qsl-code').map(([type]) => type);
+        expect(own).toEqual(['PROCESS_STARTED', 'PROCESS_COMPLETED']);
+        expect(seen).not.toHaveBeenCalled();
     });
 });

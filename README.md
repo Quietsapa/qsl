@@ -4,6 +4,8 @@
 [![npm](https://img.shields.io/npm/v/@quietsapa/qsl.svg)](https://www.npmjs.com/package/@quietsapa/qsl)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
+**A modern orchestrator for the third-party code that has to live in the browser.**
+
 A dependency-aware orchestration runtime for everything a page loads besides its
 own code: analytics tags, chat widgets, A/B testing snippets, tracking pixels,
 stylesheets and custom elements.
@@ -173,6 +175,34 @@ on a process, on a flow, or for the whole instance, and the nearest setting
 wins. For a flow, `strict` means: skip if a flow it depends on was skipped or
 had a failure inside it.
 
+`ordered` and `strict` are separate: `ordered` decides when a process starts,
+`strict` whether it runs at all. In a strict ordered flow each process counts
+as depending on the one before it, so after a failure (a timeout included) the
+rest of the chain is skipped with `reason: 'dependency'` instead of running
+without it. A process skipped by its own `condition` does not break the chain;
+it is a deliberate step. `strict: false` on one process lets it run after a
+failure, and the chain carries on from there.
+
+```js
+core.setFlowOptions({ ordered: true, strict: true }, 'setup');
+```
+
+**Timeout** — `timeout` is how many milliseconds a process may take once it
+starts loading; waiting for its trigger or its dependencies does not count.
+When it runs out, the process fails with a `TimeoutError`, exactly like a load
+error: `onError` is called, `QSL:error` fires and `strict` dependents skip.
+Like `strict` it can be set on a process, on a flow or for the whole instance,
+and `0` turns it off. A request cannot be cancelled: a script that arrives
+after its deadline still runs, but QSL has already moved on without it.
+
+**Retries** — `retries` is how many more times a load that failed is
+attempted before the process fails, `0` by default. `onError` and `QSL:error`
+come once, for the final outcome; each retry is logged as `PROCESS_RETRY`, and
+the failed element is removed before the next attempt. With a `timeout` the
+time limit covers all attempts together, and an attempt that timed out is
+never retried: its resource may still arrive and run, and a second copy would
+run twice. Set it on a process, a flow or the instance, like `timeout`.
+
 ## API
 
 ### `init()`
@@ -217,6 +247,8 @@ Sets options on a flow, creating it if needed. Merges with previous options.
 | `group` | `null` | Group name for `pauseGroup` / `runGroup` |
 | `paused` | `false` | Hold the flow until `runFlow()` or `runGroup()` |
 | `strict` | — | Skip when a dependency failed or was skipped. Not set: inherits `qsl.strict` |
+| `timeout` | — | Default `timeout` for the flow's processes, in ms. Not set: inherits `qsl.timeout` |
+| `retries` | — | Default `retries` for the flow's processes. Not set: inherits `qsl.retries` |
 | `preload` | `false` | Emit `<link rel=preload>` for scripts and styles |
 | `fireEvents` | `true` | Let the `events` plugin re-dispatch lifecycle events |
 
@@ -241,6 +273,20 @@ Sets options on a flow, creating it if needed. Merges with previous options.
 - `autoReset` — set to `false` to keep flow state after a run, for debugging.
 - `strict` — instance default for `strict` (see Outcome above). `false` unless
   you set it.
+- `timeout` — instance default for `timeout` (see Timeout above). No limit
+  unless you set it.
+- `retries` — instance default for `retries` (see Retries above). `0` unless
+  you set it.
+- `yield` — `true` by default: before each process runs, QSL gives the main
+  thread back with `scheduler.yield()`, where the browser has it. Processes
+  released together (a flow starting, a dependency settling, the next step of
+  an ordered chain) then run as separate tasks, not one long one, and a click
+  in between is handled at once instead of waiting for all of them. It matters
+  for synchronous work: inline scripts, `html` and `shadow` with a lot of
+  markup, heavy `onComplete`; external scripts already run as tasks of their
+  own. In a browser without `scheduler.yield()` (Safari, for now) nothing
+  changes. Set `false` if some inline code relies on running in the same task
+  as the one before it.
 
 ## Types
 
@@ -251,19 +297,34 @@ failed. A rejection settles the process as failed. Calling `onComplete` and
 
 | Type | Key fields |
 | --- | --- |
-| `script` | `src`, `module`, `async`, `defer`, `crossOrigin`, `integrity`, `bypassCache` |
+| `script` | `src`, `module`, `async`, `defer`, `crossOrigin`, `integrity`, `fetchPriority`, `bypassCache` |
 | `inline-script` | `code`, `module` |
-| `stylesheet` | `href`, `crossOrigin`, `bypassCache` |
+| `stylesheet` | `href`, `crossOrigin`, `fetchPriority`, `bypassCache` |
 | `style` | `code` |
-| `pixel` | `src`, `dom`, `style` |
+| `pixel` | `src`, `dom`, `style`, `fetchPriority` |
 | `html` | `tag`, `html`, `id`, `className`, `style` |
 | `shadow` | `tag`, `shadowData: { container, position, hidden }` |
 | `console` | `message` — built in, used as the default type |
 
+**Modules.** `module: true` makes a `<script type="module">`, and the browser
+runs it as it runs any module; QSL adds nothing. For `script` the process
+completes on the browser's `load` event, which a module fires once it has
+started, before a top-level `await` is done, and even if it throws. An
+`inline-script` module completes as soon as it is inserted: the browser runs
+it later and reports nothing when it has. When something has to wait for a
+module to finish, have the module say so — dispatch an event, or set a global
+that a `wait-for-global` style type watches (see the extending example).
+
+`fetchPriority` (`'high'`, `'low'` or `'auto'`) becomes the `fetchpriority`
+attribute, a hint to the browser about which requests matter more. `'low'`
+suits most third-party code: it keeps a widget from competing with the page's
+own images and scripts. A flow with `preload` passes it on to the
+`<link rel=preload>` as well.
+
 Common fields across types: `id`, `type`, `depends`, `condition`, `trigger`,
-`priority`, `delay`, `data` (rendered as `data-*` attributes), `footer` (append
-to `<body>` instead of `<head>`), and the callbacks `onBeforeStart`,
-`onComplete`, `onError`.
+`priority`, `delay`, `strict`, `timeout`, `retries`, `data` (rendered as `data-*`
+attributes), `footer` (append to `<body>` instead of `<head>`), and the
+callbacks `onBeforeStart`, `onComplete`, `onError`.
 
 Writing your own is a function returning a promise:
 
@@ -274,6 +335,12 @@ core.registerType('json', (process) =>
         .then(process.onComplete)
 );
 ```
+
+The handler's second argument holds extra callbacks from plugins. During an
+attempt that will be retried if it fails, it also carries `retrying: true`, and
+`onError` is left out of the process: clean up what the attempt added, and
+leave reporting to the last one. A type needs no timer of its own: give the
+process a `timeout`, and QSL fails it when the time is up.
 
 ## Triggers
 
@@ -361,7 +428,8 @@ Call `useEvents()` to enable them. Each carries the process config as `detail`.
 
 Exactly one of `completed`, `error` or `skipped` fires per process. On
 `QSL:error`, `detail.error` holds what the handler rejected with — the
-element's `error` event for the built-in types. On `QSL:skipped`,
+element's `error` event for the built-in types, or an `Error` named
+`TimeoutError` when the process ran out of time. On `QSL:skipped`,
 `detail.reason` says why: `'condition'`, `'dependency'` (a `strict` process or
 flow whose dependency failed or was skipped) or `'circular'`.
 
@@ -397,6 +465,7 @@ Content Security Policy, and how to report a vulnerability.
 npm install
 npm test                # vitest + happy-dom
 npm run test:coverage   # the same, with the coverage floors CI enforces
+npm run test:scheduler  # the same suite with scheduler.yield() present
 npm run build           # three bundles into dist/
 npm run check:size      # gzip budgets for the browser bundles
 npm run test:e2e        # every example in headless Chromium, against dist/

@@ -51,40 +51,7 @@ describe('shadow type', () => {
 });
 
 describe('inline-script type', () => {
-    it('escapes flow and process identifiers in the module wrapper', async () => {
-        window.__QSL__ = { currentProcessPerFlow: new Map() };
-
-        const hostile = "default'],window.__QS_PWNED__=1,[";
-
-        /**
-         * A module script only settles once the browser has executed it, which
-         * happy-dom does not do. Inspect the generated source instead.
-         */
-        InlineScript.handler({
-            flowId: hostile,
-            id: 'qsl-inject',
-            module: true,
-            code: '',
-        }, {});
-
-        await waitFor(() => document.head.querySelector('script[type="module"]') !== null);
-
-        const el = document.head.querySelector('script[type="module"]');
-        const source = el.textContent;
-        const count = (haystack, needle) => haystack.split(needle).length - 1;
-
-        /**
-         * Every appearance of the hostile value sits inside a quoted JSON
-         * literal, so none of it is ever parsed as code.
-         */
-        expect(count(source, hostile)).toBeGreaterThan(0);
-        expect(count(source, hostile)).toBe(count(source, JSON.stringify(hostile)));
-        expect(source).not.toContain(`set('${hostile}'`);
-    });
-
     it('strips script tags from inline code', async () => {
-        window.__QSL__ = { currentProcessPerFlow: new Map() };
-
         await InlineScript.handler({
             flowId: 'default',
             id: 'qsl-strip',
@@ -344,17 +311,6 @@ describe('inline-script type', () => {
         expect(completed).toBe(true);
     });
 
-    it('resolves a module once its wrapper reports back', async () => {
-        const done = InlineScript.handler(base({ code: 'void 0;', module: true }), {});
-        const el = document.querySelector('script');
-        expect(el.type).toBe('module');
-
-        /**
-         * happy-dom does not run module scripts; do what the wrapper does.
-         */
-        window.dispatchEvent(new Event('QSL:inline-script:completed:qsl-t'));
-        await expect(done).resolves.toBeUndefined();
-    });
 });
 
 describe('html type, fields', () => {
@@ -396,3 +352,54 @@ describe('shadow type, fields', () => {
     });
 });
 
+
+describe('fetchPriority', () => {
+    it('is set as the fetchpriority attribute on scripts, stylesheets and pixels', async () => {
+        /**
+         * Not awaited: only the inserted elements matter here.
+         */
+        Script.handler(base({ id: 'qsl-s', src: '/s.js', fetchPriority: 'low' }), {});
+        Stylesheet.handler(base({ id: 'qsl-c', href: '/c.css', fetchPriority: 'high' }), {});
+        Pixel.handler(base({ id: 'qsl-p', src: '/p.gif', fetchPriority: 'low' }), {});
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(document.querySelector('script[src="/s.js"]').getAttribute('fetchpriority')).toBe('low');
+        expect(document.querySelector('link[href="/c.css"]').getAttribute('fetchpriority')).toBe('high');
+        expect(document.querySelector('img[src="/p.gif"]').getAttribute('fetchpriority')).toBe('low');
+    });
+
+    it('is left out when not set', async () => {
+        await Script.handler(base({ id: 'qsl-n', src: '/n.js' }), {});
+        expect(document.querySelector('script[src="/n.js"]').hasAttribute('fetchpriority')).toBe(false);
+    });
+});
+
+describe('modules', () => {
+    /**
+     * A module is a plain <script type="module">: QSL adds nothing to how the
+     * browser runs it.
+     */
+    it('inserts an inline module and completes once it is inserted', async () => {
+        const onComplete = vi.fn();
+        await InlineScript.handler(base({ code: "import x from './x.js';", module: true, onComplete }), {});
+        const el = document.querySelector('script');
+        expect(el.type).toBe('module');
+        expect(el.textContent).toBe("import x from './x.js';");
+        expect(onComplete).toHaveBeenCalledTimes(1);
+    });
+
+    it('loads a module script as a <script type="module">', async () => {
+        Script.handler(base({ src: '/m.js', module: true, integrity: 'sha384-x' }), {});
+        await waitFor(() => document.querySelector('script') !== null);
+        const el = document.querySelector('script');
+        expect(el.type).toBe('module');
+        expect(el.integrity).toBe('sha384-x');
+    });
+
+    it('runs a classic inline script as a classic script', async () => {
+        const onComplete = vi.fn();
+        await InlineScript.handler(base({ code: 'window.__classic = 1;', onComplete }), {});
+        expect(document.querySelector('script').type).toBe('');
+        expect(onComplete).toHaveBeenCalledTimes(1);
+    });
+});

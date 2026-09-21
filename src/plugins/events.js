@@ -141,20 +141,7 @@ export default function(QSL) {
             }
             
             /**
-             * Priority 2: Check currentProcessPerFlow map for current process ID and flow ID.
-             */
-            if (!currentScriptId && this.currentProcessPerFlow.size) {
-                for (const [flowId, processId] of this.currentProcessPerFlow) {
-                    if (processId) {
-                        currentScriptId = processId;
-                        targetFlowId = flowId;
-                        break;
-                    }
-                }
-            }
-            
-            /**
-             * Priority 3: Use Error stack trace only when currentScript is null.
+             * Priority 2: Use Error stack trace only when currentScript is null.
              */
             if (!currentScriptId) {
                 const stack = new Error().stack;

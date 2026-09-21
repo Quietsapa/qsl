@@ -21,7 +21,7 @@ import path from 'node:path';
 import url from 'node:url';
 
 const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
-const CDN = /https:\/\/cdn\.jsdelivr\.net\/npm\/@quietsapa\/qsl@[^/]+\/dist\//g;
+const CDN = /https:\/\/cdn\.jsdelivr\.net\/npm\/@quietsapa\/qsl(?:@[^/]+)?\/dist\//g;
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.gif': 'image/gif' };
 
 if (!existsSync(path.join(root, 'dist', 'qsl.min.js'))) {
@@ -84,7 +84,7 @@ async function until(page, check, arg, timeout = 8000) {
     await page.waitForFunction(check, arg, { timeout, polling: 50 });
 }
 
-async function scenario(name, pagePath, run, contextOptions = {}, usesQsl = true) {
+async function scenario(name, pagePath, run, contextOptions = {}, usesQsl = true, expectedErrors = []) {
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
     const errors = [];
@@ -94,7 +94,8 @@ async function scenario(name, pagePath, run, contextOptions = {}, usesQsl = true
         await page.goto(base + pagePath);
         if (usesQsl) await until(page, () => window.__QSL__ && window.__QSL__.initialized);
         await run(page);
-        if (errors.length) throw new Error('page errors: ' + errors.join('; '));
+        const unexpected = errors.filter((e) => !expectedErrors.some((re) => re.test(e)));
+        if (unexpected.length) throw new Error('page errors: ' + unexpected.join('; '));
         console.log('PASS  ' + name);
     } catch (e) {
         failures++;
@@ -116,6 +117,13 @@ await scenario('index: every example is linked and reachable', 'index.html', asy
     for (const link of links) {
         const res = await page.request.get(link);
         if (!res.ok()) throw new Error(link + ' → ' + res.status());
+
+        /**
+         * And every example links back to this page.
+         */
+        await page.goto(link);
+        const back = await page.evaluate(() => document.querySelector('a[href="../index.html"]')?.href);
+        if (!back || !(await page.request.get(back)).ok()) throw new Error(link + ' has no working link back');
     }
 }, {}, false);
 
@@ -297,6 +305,28 @@ await scenario('extending: types, plugin, logger, timings', 'extending/index.htm
     if (t.indexOf('consent-defaults:completed') > t.indexOf('tag-manager:completed')) throw new Error('priority ignored');
     if (!result.logger.includes('DEP_NOT_FOUND')) throw new Error('logger');
 });
+
+/**
+ * Modules, from a fixture rather than an example (happy-dom runs no modules):
+ * a module is a plain <script type="module">, and a process ends the way the
+ * browser reports it.
+ */
+await scenario('modules: plain module scripts, as the browser runs them', '../scripts/fixtures/modules/index.html', async (page) => {
+    await until(page, () => window.done === true);
+    await until(page, () => window.awaited === 1 && window.externalAwaited === 1);
+    const r = await page.evaluate(() => ({
+        outcomes: window.outcomes,
+        atDone: window.atDone,
+        values: [window.relative, window.nested, window.parent_, window.root],
+        modules: document.querySelectorAll('script[type="module"]').length,
+    }));
+    for (const id of ['relative', 'nested', 'parent', 'root', 'await', 'external', 'external-throws']) {
+        if (r.outcomes[id] !== 'completed') throw new Error(`${id}: ${r.outcomes[id]}`);
+    }
+    if (JSON.stringify(r.values) !== '["dep","c","shared","shared"]') throw new Error('values ' + JSON.stringify(r.values));
+    if (r.atDone.awaited || r.atDone.externalAwaited) throw new Error('waited for a module: ' + JSON.stringify(r.atDone));
+    if (r.modules !== 7) throw new Error('module scripts: ' + r.modules);
+}, {}, true, [/in dependency/]);
 
 await browser.close();
 server.close();

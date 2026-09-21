@@ -406,29 +406,6 @@ describe('events plugin', () => {
         expect(hits).toEqual(['listener-0']);
     });
 
-    it('attributes a listener to the process running in its flow', async () => {
-        const core = await freshCore();
-        core.use(events);
-        core.LIFECYCLE.DOMREADY = true;
-        const hits = [];
-
-        /**
-         * What the module wrapper of an inline script does: mark the
-         * process as running in its flow while its code executes.
-         */
-        core.registerType('module-like', (process) => {
-            core.currentProcessPerFlow.set(process.flowId, process.id);
-            document.addEventListener('DOMContentLoaded', () => hits.push('module'));
-            core.currentProcessPerFlow.delete(process.flowId);
-            return Promise.resolve();
-        });
-
-        core.add({ id: 'inline', type: 'module-like' }, 'f');
-        await core.load();
-
-        expect(hits).toEqual(['module']);
-    });
-
     it('falls back to the stack trace to find a script process', async () => {
         const core = await freshCore();
         core.use(events);
@@ -436,7 +413,7 @@ describe('events plugin', () => {
         const hits = [];
 
         /**
-         * No currentScript and no running process: the listener is
+         * No currentScript: the listener is
          * registered from this file, so a script process whose src ends in
          * this file's name is the one it belongs to.
          */
