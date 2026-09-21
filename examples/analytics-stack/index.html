@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QSL example — an analytics SDK and everything that depends on it</title>
+
+<!--
+  THE PROBLEM
+
+  An analytics stack is never one script. There is the SDK, which defines a
+  global. There are plugins for it, which assume the global exists. There are
+  setup calls — init, identify, page view — that must run after the SDK and in
+  that order. And there is marketing, which wants the visitor id the setup
+  produced.
+
+  Now an ad blocker removes the SDK. Every plugin throws "acme is not
+  defined", the setup calls throw too, and the marketing pixel fires anyway
+  without the id it needed. Nobody notices, because nothing on the page looks
+  broken. The data is simply wrong.
+
+  What you actually want: if the SDK does not load, nothing that needs it
+  runs, and a small fallback beacon records the visit instead.
+
+  THE SHAPE HERE
+
+    analytics    strict   sdk, then the ecommerce plugin (depends on sdk)
+    extras                heatmap plugin — depends on sdk, waits for idle
+    setup        strict   init → identify → page view, ordered, after analytics
+    marketing    strict   conversion pixel, after setup
+    fallback              a beacon, after analytics, only if window.acme is missing
+
+  `strict` is what makes a failure travel. A strict process is skipped when
+  something it depends on failed or was skipped; a strict flow is skipped when
+  a flow it depends on was skipped or had a failure inside it. Without
+  `strict`, `depends` only means "wait until that has finished".
+
+  The heatmap sits in its own flow on purpose. It is not essential, so its
+  failure should not take the page view down with it. Try both toggles to see
+  the difference.
+-->
+
+<style>
+  :root { color-scheme: light dark; --line:#d8d8dc; --muted:#6b6b76; --bg:#fff; --fg:#17171b; --card:#f6f6f8;
+          --ok:#0a7d55; --bad:#b91c1c; --skip:#8a6d00; --run:#2d7ff9; }
+  @media (prefers-color-scheme: dark) { :root { --line:#33333b; --muted:#9a9aa6; --bg:#141418; --fg:#eeeef2; --card:#1d1d23;
+          --ok:#34d399; --bad:#f87171; --skip:#facc15; --run:#60a5fa; } }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+  main { max-width: 900px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lede { color: var(--muted); margin: 0 0 22px; }
+  h2 { font-size: 15px; margin: 28px 0 10px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .mono, code, td { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  code { background: var(--card); border: 1px solid var(--line); padding: 1px 5px; border-radius: 4px; }
+  nav.modes { display: flex; flex-wrap: wrap; gap: 8px; }
+  nav.modes a { padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px; color: inherit; text-decoration: none; font-size: 14px; }
+  nav.modes a.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 7px 10px; border-top: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--card); border-top: 0; }
+  .pill { display: inline-block; min-width: 76px; font-weight: 600; }
+  .started { color: var(--run); } .completed { color: var(--ok); } .error { color: var(--bad); } .skipped { color: var(--skip); }
+  ul.log { border: 1px solid var(--line); border-radius: 8px; padding: 0; margin: 0; list-style: none; overflow: hidden; }
+  ul.log li { padding: 6px 12px; border-top: 1px solid var(--line); }
+  ul.log li:first-child { border-top: 0; }
+  .t { color: var(--muted); margin-right: 10px; }
+  #verdict { padding: 12px 14px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); min-height: 48px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>An analytics SDK and everything that depends on it</h1>
+  <p class="lede">Block the SDK and watch the failure travel exactly as far as it should.</p>
+
+  <nav class="modes">
+    <a href="?" id="mode-normal">Everything loads</a>
+    <a href="?blocked=1" id="mode-blocked">Ad blocker removes the SDK</a>
+    <a href="?heatmap=broken" id="mode-heatmap">Only the heatmap plugin fails</a>
+  </nav>
+
+  <h2>Processes</h2>
+  <p class="hint">One row per process, in the order QSL first reported it. The reason column is the <code>reason</code> field of <code>QSL:skipped</code>.</p>
+  <table>
+    <thead><tr><th>process</th><th>flow</th><th>state</th><th>reason</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <h2>What the SDK and the page saw</h2>
+  <ul class="log mono" id="log"></ul>
+
+  <h2>Result</h2>
+  <div id="verdict">running…</div>
+</main>
+
+<script>
+/**
+ * Demo plumbing, not part of an integration: a log line the vendor stubs in
+ * ./vendor can write to, so the page shows what actually executed. It is
+ * defined before QSL so the stubs can always find it.
+ */
+(function () {
+  var started = Date.now();
+  window.demoNote = function (source, message) {
+    var li = document.createElement('li');
+    li.innerHTML = '<span class="t">+' + String(Date.now() - started).padStart(4, '0') + 'ms</span><strong>' + source + '</strong> — ' + message;
+    document.getElementById('log').appendChild(li);
+  };
+  /**
+   * A plugin that runs without its SDK throws; show it rather than hide it.
+   */
+  window.addEventListener('error', function (e) {
+    if (e.message) window.demoNote('uncaught', e.message);
+  });
+})();
+
+window.QSLReady = function () {
+  var qsl = window.__QSL__;
+  var params = new URLSearchParams(location.search);
+  var mode = params.get('blocked') ? 'blocked' : params.get('heatmap') ? 'heatmap' : 'normal';
+  document.getElementById('mode-' + mode).className = 'on';
+
+  /**
+   * Demo plumbing: turn QSL's lifecycle events into the table above.
+   * useEvents() is the part that matters — without it QSL fires nothing.
+   */
+  qsl.useEvents();
+  ['started', 'completed', 'error', 'skipped'].forEach(function (name) {
+    window.addEventListener('QSL:' + name, function (e) {
+      var id = e.detail.id.replace(/^qsl-/, '');
+      var row = document.getElementById('row-' + id);
+      if (!row) {
+        row = document.createElement('tr');
+        row.id = 'row-' + id;
+        row.innerHTML = '<td>' + id + '</td><td>' + e.detail.flowId + '</td><td></td><td></td>';
+        document.getElementById('rows').appendChild(row);
+      }
+      row.cells[2].innerHTML = '<span class="pill ' + name + '">' + name + '</span>';
+      row.cells[3].textContent = e.detail.reason || (e.detail.error ? 'failed to load' : '');
+    });
+  });
+
+  /**
+   * ── analytics ────────────────────────────────────────────────────────
+   * strict: the ecommerce plugin is skipped if the SDK fails.
+   * preload: both files start downloading at once, even though the plugin
+   * only executes after the SDK has.
+   */
+  qsl.setFlowOptions({ strict: true, preload: true }, 'analytics');
+
+  qsl.add({
+    id: 'sdk',
+    type: 'script',
+    /**
+     * A missing file behaves exactly like a request an ad blocker cancels.
+     */
+    src: mode === 'blocked' ? './vendor/blocked/acme-sdk.js' : './vendor/acme-sdk.js',
+    onError: function () { window.demoNote('page', 'the SDK did not load'); }
+  }, 'analytics');
+
+  qsl.add({
+    id: 'ecommerce',
+    type: 'script',
+    src: './vendor/acme-ecommerce.js',
+    depends: ['sdk']
+  }, 'analytics');
+
+  /**
+   * ── extras ───────────────────────────────────────────────────────────
+   * Not strict as a flow, so its outcome never blocks anything else. The
+   * process itself is strict, so it does not run without the SDK, and it
+   * needs both its dependency and an idle moment.
+   */
+  qsl.add({
+    id: 'heatmap',
+    type: 'script',
+    src: mode === 'heatmap' ? './vendor/broken/acme-heatmap.js' : './vendor/acme-heatmap.js',
+    depends: ['sdk'],
+    strict: true,
+    trigger: 'idle'
+  }, 'extras');
+
+  /**
+   * ── setup ────────────────────────────────────────────────────────────
+   * Three calls in a fixed order with a gap between them, and only once the
+   * whole analytics flow is through.
+   */
+  qsl.setFlowOptions({ ordered: true, between: 120, depends: ['analytics'], strict: true }, 'setup');
+
+  qsl.add({ id: 'init', type: 'inline-script', code: "acme.init('demo-key');" }, 'setup');
+  qsl.add({ id: 'identify', type: 'inline-script', code: "acme.identify('visitor-42');" }, 'setup');
+  qsl.add({ id: 'page-view', type: 'inline-script', code: 'acme.page();' }, 'setup');
+
+  /**
+   * ── marketing ────────────────────────────────────────────────────────
+   * Needs the visitor id from setup, so it goes where setup goes.
+   */
+  qsl.setFlowOptions({ depends: ['setup'], strict: true }, 'marketing');
+
+  qsl.add({
+    id: 'conversion-pixel',
+    type: 'pixel',
+    src: './vendor/pixel.gif?event=view&visitor=visitor-42',
+    onComplete: function () { window.demoNote('pixel', 'conversion pixel sent'); }
+  }, 'marketing');
+
+  /**
+   * ── fallback ─────────────────────────────────────────────────────────
+   * Not strict: it runs after analytics however analytics went. Its
+   * condition, checked at the moment it would run, decides the rest.
+   */
+  qsl.setFlowOptions({ depends: ['analytics'] }, 'fallback');
+
+  qsl.add({
+    id: 'fallback-beacon',
+    type: 'pixel',
+    src: './vendor/collect.gif?fallback=1',
+    condition: function () { return !window.acme; },
+    onComplete: function () { window.demoNote('beacon', 'fallback beacon sent instead'); }
+  }, 'fallback');
+
+  qsl.load().then(function () {
+    var verdict = {
+      normal: 'Everything ran. The fallback beacon was skipped by its condition, because the SDK is there.',
+      blocked: 'The SDK failed, so the ecommerce and heatmap plugins were skipped instead of throwing, ' +
+               'setup and marketing never ran, and the fallback beacon recorded the visit. No uncaught errors above.',
+      heatmap: 'The heatmap plugin failed, and that is all that happened: it lives outside the strict chain, ' +
+               'so the page view and the conversion pixel went out as usual.'
+    };
+    document.getElementById('verdict').textContent = verdict[mode];
+  });
+};
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl@0.2/dist/qsl.min.js?async=true"></script>
+</body>
+</html>

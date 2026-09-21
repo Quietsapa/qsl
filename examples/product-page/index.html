@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QSL example — a product page that loads each widget when it is needed</title>
+
+<!--
+  THE PROBLEM
+
+  A product page collects widgets: reviews, a chat, a zoomable gallery,
+  recommendations in the cart, a promo bar. Each is a script, often a
+  stylesheet too, and the usual way to add them is to put all of them in the
+  <head>. The first screen then waits for code that serves the bottom of the
+  page, a chat nobody opened, and a cart drawer that does not exist yet.
+
+  Each widget has an obvious moment when it becomes useful. The work is in
+  wiring every one of those moments by hand: an IntersectionObserver here, a
+  MutationObserver there, a matchMedia listener, a hover handler, timers.
+
+  THE SHAPE HERE
+
+  One flow per widget, and the moment is the flow's trigger:
+
+    promo      ['domready', 'delay:1200']       both: page parsed AND 1.2 s passed
+    reviews    'visible:#reviews'               the section scrolls into view
+    chat       { or: hover on the launcher, or 20 s on the page }
+    zoom       'media:(min-width: 900px)'       wide viewport — now or after a resize
+    upsell     'appears:.cart-drawer'           the drawer is inserted into the DOM
+    history    'idle' on the process itself     the browser has nothing better to do
+
+  The first screen loads nothing but QSL. Scroll, hover the help button, add
+  to cart and resize the window, and watch the board on the right fill in.
+
+  Types used along the way: `style` and `html` for the promo bar, `stylesheet`
+  and `script` with `data-*` settings for reviews, `shadow` for a chat that
+  ships as a custom element, `inline-script` for the history entry.
+-->
+
+<style>
+  :root { color-scheme: light dark; --line:#d8d8dc; --muted:#6b6b76; --bg:#fff; --fg:#17171b; --card:#f6f6f8; --ok:#0a7d55; --wait:#8a6d00; }
+  @media (prefers-color-scheme: dark) { :root { --line:#33333b; --muted:#9a9aa6; --bg:#141418; --fg:#eeeef2; --card:#1d1d23; --ok:#34d399; --wait:#facc15; } }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+  .mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .layout { max-width: 1100px; margin: 0 auto; padding: 28px 16px 120px; display: grid; gap: 28px; grid-template-columns: minmax(0, 1fr) 300px; }
+  @media (max-width: 899px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  .hero { display: grid; gap: 20px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 640px) { .hero { grid-template-columns: 1fr; } }
+  .gallery { aspect-ratio: 1; border-radius: 10px; background: linear-gradient(135deg, #cfd8e3, #9fb1c7); position: relative; }
+  .gallery.zoomable::after { content: 'hover to zoom'; position: absolute; left: 10px; bottom: 10px; font-size: 12px; padding: 3px 8px; border-radius: 99px; background: rgba(0,0,0,.55); color: #fff; }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  .price { font-size: 20px; margin: 0 0 16px; }
+  button { font: inherit; padding: 9px 16px; border-radius: 6px; border: 1px solid var(--fg); background: var(--fg); color: var(--bg); cursor: pointer; }
+  .copy { color: var(--muted); }
+  .spacer { height: 900px; margin: 24px 0; border: 1px dashed var(--line); border-radius: 8px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+  #reviews { min-height: 160px; border: 1px dashed var(--line); border-radius: 8px; padding: 14px; color: var(--muted); }
+  aside { position: sticky; top: 16px; align-self: start; }
+  aside h2 { font-size: 14px; margin: 0 0 8px; }
+  aside ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  aside li { padding: 8px 10px; border-top: 1px solid var(--line); }
+  aside li:first-child { border-top: 0; }
+  aside li b { display: block; font-size: 13px; }
+  aside li span { color: var(--wait); }
+  aside li.done span { color: var(--ok); }
+  #notes { margin-top: 14px; }
+  #notes li { font-size: 12px; }
+  #chat-launcher { position: fixed; right: 16px; bottom: 16px; border-radius: 99px; }
+  .cart-drawer { margin-top: 16px; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: var(--card); }
+  .cart-drawer .upsell { margin-top: 8px; font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <main>
+    <section class="hero">
+      <div class="gallery" aria-label="Product photo"></div>
+      <div>
+        <h1>Trail runner, size 42</h1>
+        <p class="price">€129</p>
+        <button id="add-to-cart">Add to cart</button>
+        <div id="cart"></div>
+        <p class="copy">A light shoe with a grippy sole. Everything beyond this first screen loads when it becomes useful.</p>
+      </div>
+    </section>
+
+    <div class="spacer">scroll down — the reviews widget loads as the section comes into view</div>
+
+    <h2>Reviews</h2>
+    <div id="reviews">Reviews load when this section is visible.</div>
+  </main>
+
+  <aside>
+    <h2>Loaded so far</h2>
+    <ul id="board">
+      <li id="b-promo-style"><b>promo-style</b><span class="mono">waiting: domready + 1.2 s</span></li>
+      <li id="b-promo-bar"><b>promo-bar</b><span class="mono">waiting: domready + 1.2 s</span></li>
+      <li id="b-reviews-css"><b>reviews-css</b><span class="mono">waiting: visible:#reviews</span></li>
+      <li id="b-reviews"><b>reviews</b><span class="mono">waiting: visible:#reviews</span></li>
+      <li id="b-chat-element"><b>chat-element</b><span class="mono">waiting: hover launcher or 20 s</span></li>
+      <li id="b-chat"><b>chat</b><span class="mono">waiting: hover launcher or 20 s</span></li>
+      <li id="b-zoom"><b>zoom</b><span class="mono">waiting: viewport ≥ 900px</span></li>
+      <li id="b-upsell"><b>upsell</b><span class="mono">waiting: .cart-drawer appears</span></li>
+      <li id="b-history"><b>history</b><span class="mono">waiting: idle</span></li>
+    </ul>
+    <ul id="notes" class="mono"></ul>
+  </aside>
+</div>
+
+<button id="chat-launcher">Need help?</button>
+
+<script>
+/**
+ * Demo plumbing: a note list the vendor stubs in ./vendor write to.
+ */
+(function () {
+  var started = Date.now();
+  window.demoNote = function (source, message) {
+    var li = document.createElement('li');
+    li.textContent = '+' + (Date.now() - started) + 'ms ' + source + ': ' + message;
+    document.getElementById('notes').appendChild(li);
+  };
+})();
+
+/**
+ * Page code, not QSL: the cart drawer is created on demand, as in most
+ * storefronts. The upsell flow below waits for it to appear.
+ */
+document.getElementById('add-to-cart').addEventListener('click', function () {
+  if (document.querySelector('.cart-drawer')) return;
+  document.getElementById('cart').innerHTML =
+    '<div class="cart-drawer">1 × Trail runner added to cart<div class="upsell">…</div></div>';
+});
+
+/**
+ * Page code again: once the chat has loaded, the launcher opens it.
+ */
+document.getElementById('chat-launcher').addEventListener('click', function () {
+  var chat = document.querySelector('acme-chat');
+  if (chat) chat.toggle();
+});
+
+window.QSLReady = function () {
+  var qsl = window.__QSL__;
+  var started = Date.now();
+
+  /**
+   * Demo plumbing: tick off the board as processes complete.
+   */
+  qsl.useEvents();
+  window.addEventListener('QSL:completed', function (e) {
+    var item = document.getElementById('b-' + e.detail.id.replace(/^qsl-/, ''));
+    if (!item) return;
+    item.className = 'done';
+    item.querySelector('span').textContent = 'loaded at +' + (Date.now() - started) + 'ms';
+  });
+
+  /**
+   * ── promo ─────────────────────────────────────────────────────────────
+   * An array of triggers means all of them. The bar is not worth showing
+   * before the page has settled, and not before the visitor has had a
+   * moment with the product.
+   */
+  qsl.setFlowOptions({ trigger: ['domready', 'delay:1200'] }, 'promo');
+
+  qsl.add({
+    id: 'promo-style',
+    type: 'style',
+    code: '.promo-bar { position: fixed; top: 0; left: 0; right: 0; padding: 8px 16px; text-align: center;' +
+          ' background: #0a7d55; color: #fff; font-size: 14px; z-index: 10; }'
+  }, 'promo');
+
+  qsl.add({
+    id: 'promo-bar',
+    type: 'html',
+    tag: 'div',
+    className: 'promo-bar',
+    html: 'Free delivery on orders over €100 — this week only',
+    footer: true
+  }, 'promo');
+
+  /**
+   * ── reviews ───────────────────────────────────────────────────────────
+   * Stylesheet and widget together, once the section is in view. `data`
+   * becomes data-product and data-target on the <script> element.
+   */
+  qsl.setFlowOptions({ trigger: 'visible:#reviews' }, 'reviews');
+
+  qsl.add({
+    id: 'reviews-css',
+    type: 'stylesheet',
+    href: './vendor/reviews.css'
+  }, 'reviews');
+
+  qsl.add({
+    id: 'reviews',
+    type: 'script',
+    src: './vendor/reviews-widget.js',
+    data: { product: 'sku-123', target: '#reviews' },
+    footer: true
+  }, 'reviews');
+
+  /**
+   * ── chat ──────────────────────────────────────────────────────────────
+   * 'or' fires on whichever comes first. Hover is the strong signal on a
+   * desktop; the timer covers touch screens, where there is no hover. The
+   * flow is ordered so the element is defined before it is inserted.
+   */
+  qsl.setFlowOptions({
+    ordered: true,
+    trigger: { operator: 'or', triggers: ['hover:#chat-launcher', 'delay:20000'] }
+  }, 'chat');
+
+  qsl.add({
+    id: 'chat-element',
+    type: 'script',
+    src: './vendor/chat-element.js'
+  }, 'chat');
+
+  qsl.add({
+    id: 'chat',
+    type: 'shadow',
+    tag: 'acme-chat',
+    shadowData: { container: 'body', greeting: 'Hi from the product page' }
+  }, 'chat');
+
+  /**
+   * ── zoom ──────────────────────────────────────────────────────────────
+   * As a trigger, `media:` waits: load it now if the viewport is wide,
+   * otherwise the moment it becomes wide. As a condition it would decide
+   * once and never reconsider.
+   */
+  qsl.setFlowOptions({ trigger: 'media:(min-width: 900px)' }, 'zoom');
+
+  qsl.add({
+    id: 'zoom',
+    type: 'script',
+    src: './vendor/zoom.js'
+  }, 'zoom');
+
+  /**
+   * ── upsell ────────────────────────────────────────────────────────────
+   * The drawer does not exist yet. `appears:` waits until it is inserted,
+   * however and whenever the page inserts it.
+   */
+  qsl.setFlowOptions({ trigger: 'appears:.cart-drawer' }, 'upsell');
+
+  qsl.add({
+    id: 'upsell',
+    type: 'script',
+    src: './vendor/upsell.js'
+  }, 'upsell');
+
+  /**
+   * ── history ───────────────────────────────────────────────────────────
+   * A trigger can sit on one process instead of a whole flow. This one
+   * joins the default flow and waits for the browser to go idle.
+   */
+  qsl.add({
+    id: 'history',
+    type: 'inline-script',
+    code: "try { localStorage.setItem('recently-viewed', 'sku-123'); } catch (e) {}" +
+          " window.demoNote('history', 'recorded as recently viewed');",
+    trigger: 'idle'
+  });
+
+  qsl.load();
+};
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl@0.2/dist/qsl.min.js?async=true"></script>
+</body>
+</html>

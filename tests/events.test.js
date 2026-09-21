@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { freshCore } from './helpers.js';
 import events from '../src/plugins/events.js';
-import dynamic from '../src/plugins/dynamic.js';
 
 /**
  * The events plugin gives a late-loading process its own DOMContentLoaded and
@@ -30,9 +29,11 @@ function registerVendorType(core, event, hits, listenerCount) {
         const element = document.createElement('script');
         callbacks.registerProcessElement?.(element, process);
 
-        /* Define the property outright rather than spying on the getter:
-           repeated spy/restore cycles on the same accessor chain onto each
-           other and eventually recurse. */
+        /**
+         * Define the property outright rather than spying on the getter:
+         * repeated spy/restore cycles on the same accessor chain onto each
+         * other and eventually recurse.
+         */
         Object.defineProperty(document, 'currentScript', {
             value: element,
             configurable: true,
@@ -98,8 +99,10 @@ describe('events plugin', () => {
 
         const hits = [];
 
-        /* Ids are not unique: the same explicit id can be reused in a later
-           run. The first run's listener must not fire again in the second. */
+        /**
+         * Ids are not unique: the same explicit id can be reused in a later
+         * run. The first run's listener must not fire again in the second.
+         */
         core.registerType('vendor', (process, callbacks) => {
             const element = document.createElement('script');
             callbacks.registerProcessElement?.(element, process);
@@ -125,7 +128,6 @@ describe('events plugin', () => {
     it('keeps a late add with a reused id from waking the earlier process', async () => {
         const core = await freshCore();
         core.use(events);
-        core.use(dynamic);
         core.LIFECYCLE.DOMREADY = true;
 
         const hits = [];
@@ -162,8 +164,10 @@ describe('events plugin', () => {
         const hits = [];
         core.registerType('noop', () => Promise.resolve());
 
-        /* Registered outside any process: nothing to attribute it to, so it
-           stays bound to the real event and never fires. */
+        /**
+         * Registered outside any process: nothing to attribute it to, so it
+         * stays bound to the real event and never fires.
+         */
         document.addEventListener('DOMContentLoaded', () => hits.push('unmanaged'));
 
         core.add({ id: 'plain', type: 'noop' });
@@ -189,26 +193,32 @@ describe('events plugin', () => {
     describe('addEventListener patch lifecycle', () => {
         const own = (target) => Object.prototype.hasOwnProperty.call(target, 'addEventListener');
 
-        /* The prototype that actually supplies document.addEventListener. In
-           a browser that is EventTarget.prototype; happy-dom has its own
-           chain, so look it up rather than assume. */
+        /**
+         * The prototype that actually supplies document.addEventListener. In
+         * a browser that is EventTarget.prototype; happy-dom has its own
+         * chain, so look it up rather than assume.
+         */
         const owner = (target) => {
             let p = target;
             while (p && !own(p)) p = Object.getPrototypeOf(p);
             return p;
         };
 
-        /* A plugin that leaked in an earlier test would leave an own property
-           on document and mask the check below. document never has one
-           natively, so start each test from the native state. */
+        /**
+         * A plugin that leaked in an earlier test would leave an own property
+         * on document and mask the check below. document never has one
+         * natively, so start each test from the native state.
+         */
         beforeEach(() => {
             if (own(document)) delete document.addEventListener;
         });
 
         it('restores the exact own-property state of document and window', async () => {
-            /* document normally inherits the method; window may or may not
-               (happy-dom defines it on the instance). Either way, the state
-               after a run must match the state before it. */
+            /**
+             * document normally inherits the method; window may or may not
+             * (happy-dom defines it on the instance). Either way, the state
+             * after a run must match the state before it.
+             */
             const docBefore = own(document);
             expect(docBefore).toBe(false);
             const winBefore = own(window);
@@ -228,8 +238,10 @@ describe('events plugin', () => {
         });
 
         it('lets a prototype patch installed after the run reach document', async () => {
-            /* Resolve the prototype before the run: afterwards, a leaked own
-               property would make document itself look like the owner. */
+            /**
+             * Resolve the prototype before the run: afterwards, a leaked own
+             * property would make document itself look like the owner.
+             */
             const proto = owner(Object.getPrototypeOf(document));
             const core = await freshCore();
             core.use(events);
@@ -239,7 +251,9 @@ describe('events plugin', () => {
             core.add({ id: 'plain', type: 'noop' });
             await core.load();
 
-            /* What an APM or RUM SDK loaded later does. */
+            /**
+             * What an APM or RUM SDK loaded later does.
+             */
             const native = proto.addEventListener;
             const seen = [];
             proto.addEventListener = function (type, ...rest) {
@@ -280,8 +294,10 @@ describe('events plugin', () => {
 
                 expect(document.addEventListener).toBe(apmWrapper);
 
-                /* Outside a run the plugin passes through: the real event
-                   name reaches the native method untouched. */
+                /**
+                 * Outside a run the plugin passes through: the real event
+                 * name reaches the native method untouched.
+                 */
                 const hits = [];
                 document.addEventListener('DOMContentLoaded', () => hits.push('outside'));
                 document.dispatchEvent(new Event('DOMContentLoaded'));
@@ -354,6 +370,85 @@ describe('events plugin', () => {
 
             expect(receivers).toContain(other);
         });
+    });
+
+    it('honours fireEvents: false on the flow', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+
+        const hits = [];
+        registerVendorType(core, 'DOMContentLoaded', hits, 1);
+
+        core.setFlowOptions({ fireEvents: false }, 'quiet');
+        core.add({ id: 'vendor', type: 'vendor' }, 'quiet');
+        await core.load();
+
+        expect(hits).toEqual([]);
+    });
+
+    it('leaves a listener alone when the event has not happened yet', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = false;
+
+        const hits = [];
+        registerVendorType(core, 'DOMContentLoaded', hits, 1);
+
+        core.add({ id: 'vendor', type: 'vendor' });
+        await core.load();
+        expect(hits).toEqual([]);
+
+        /**
+         * The real event still reaches it, exactly once.
+         */
+        document.dispatchEvent(new Event('DOMContentLoaded'));
+        expect(hits).toEqual(['listener-0']);
+    });
+
+    it('attributes a listener to the process running in its flow', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const hits = [];
+
+        /**
+         * What the module wrapper of an inline script does: mark the
+         * process as running in its flow while its code executes.
+         */
+        core.registerType('module-like', (process) => {
+            core.currentProcessPerFlow.set(process.flowId, process.id);
+            document.addEventListener('DOMContentLoaded', () => hits.push('module'));
+            core.currentProcessPerFlow.delete(process.flowId);
+            return Promise.resolve();
+        });
+
+        core.add({ id: 'inline', type: 'module-like' }, 'f');
+        await core.load();
+
+        expect(hits).toEqual(['module']);
+    });
+
+    it('falls back to the stack trace to find a script process', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const hits = [];
+
+        /**
+         * No currentScript and no running process: the listener is
+         * registered from this file, so a script process whose src ends in
+         * this file's name is the one it belongs to.
+         */
+        core.registerType('script', () => {
+            document.addEventListener('DOMContentLoaded', () => hits.push('by-stack'));
+            return Promise.resolve();
+        });
+
+        core.add({ id: 'vendor', type: 'script', src: 'https://cdn.example/vendor/events.test.js?v=2' });
+        await core.load();
+
+        expect(hits).toEqual(['by-stack']);
     });
 });
 

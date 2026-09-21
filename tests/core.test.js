@@ -98,11 +98,15 @@ describe('reset and destroy', () => {
         core.add({ id: 'a', type: 'mark' });
         await core.load();
 
-        /* The run is over and state is cleared ... */
+        /**
+         * The run is over and state is cleared ...
+         */
         expect(core.flows.size).toBe(0);
         expect(core.hasStarted).toBe(false);
 
-        /* ... but the plugin surface survives, so a second run behaves the same. */
+        /**
+         * ... but the plugin surface survives, so a second run behaves the same.
+         */
         expect(core.types.has('mark')).toBe(true);
         expect(core.conditionHandlers.size).toBe(handlerCount);
     });

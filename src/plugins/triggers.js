@@ -43,7 +43,9 @@ const whenElement = (selector, cb) => {
     try {
         el = document.querySelector(selector);
     } catch (e) {
-        /* Invalid selector: fail open so the flow is never stuck. */
+        /**
+         * Invalid selector: fail open so the flow is never stuck.
+         */
         cb(null);
         return;
     }
@@ -73,6 +75,33 @@ const whenElement = (selector, cb) => {
     });
     observer.observe(root, { childList: true, subtree: true });
 };
+
+/**
+ * Call `cb` once, on the first click, keydown, wheel, mousedown, mousemove or
+ * touchstart.
+ *
+ * @param {Function} cb
+ * @returns {void}
+ */
+const waitForInteraction = (cb) => {
+    const events = ['click', 'keydown', 'wheel', 'mousedown', 'mousemove', 'touchstart'];
+    const handler = () => {
+        events.forEach(e => window.removeEventListener(e, handler, { passive: true, once: true }));
+        cb();
+    };
+    events.forEach(e => window.addEventListener(e, handler, { passive: true, once: true }));
+};
+
+/**
+ * `interaction` (or `true`) - fires on the first user interaction.
+ * @param {Object} QSL
+ */
+export function interactionTrigger(QSL) {
+    QSL.triggerHandlers.add(function (opt) {
+        if (opt !== true && opt !== 'interaction') return null;
+        return (cb) => waitForInteraction(cb);
+    });
+}
 
 /**
  * `load` - fires on the window load event.
@@ -236,6 +265,7 @@ export function mediaQueryTrigger(QSL) {
  * @param {Object} QSL
  */
 export default function (QSL) {
+    interactionTrigger(QSL);
     loadTrigger(QSL);
     idleTrigger(QSL);
     domReadyTrigger(QSL);

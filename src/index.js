@@ -30,6 +30,7 @@ export {
 
 export {
     default as triggers,
+    interactionTrigger,
     loadTrigger,
     idleTrigger,
     domReadyTrigger,
@@ -42,6 +43,3 @@ export {
 
 export { default as logger } from './plugins/logger.js';
 export { default as events } from './plugins/events.js';
-export { default as circ } from './plugins/circ.js';
-export { default as dynamic } from './plugins/dynamic.js';
-export { default as simpleEvents } from './plugins/simple-events.js';

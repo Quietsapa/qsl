@@ -7,9 +7,9 @@ export default function(QSL) {
     const processElementMap = new WeakMap();
     let processCounter = 0;
 
-    /* Whether our lifecycle logic runs. The wrappers can outlive a run (see
-       createPatch), so this flag — not their presence — is what switches the
-       interception on and off. */
+    /**
+     * Whether our lifecycle logic runs. The wrappers can outlive a run (see createPatch), so this flag — not their presence — is what switches the interception on and off. 
+     */
     let active = false;
     let lifecycleIterator = null;
 
@@ -70,8 +70,9 @@ export default function(QSL) {
         const patch = { original: null, wrapper: null, hadOwn: false };
 
         patch.apply = () => {
-            /* Still installed from an earlier run, on top or stacked under
-               someone else: flipping `active` is all it takes. */
+            /**
+             * Still installed from an earlier run, on top or stacked under someone else: flipping `active` is all it takes. 
+             */
             if (patch.wrapper) return;
             patch.hadOwn = Object.prototype.hasOwnProperty.call(target, 'addEventListener');
             patch.original = target.addEventListener;
@@ -93,8 +94,9 @@ export default function(QSL) {
         return patch;
     };
 
-    /* Regular functions, not arrows: the original is called with whatever
-       receiver the caller used, exactly as the native method would be. */
+    /**
+     * Regular functions, not arrows: the original is called with whatever receiver the caller used, exactly as the native method would be. 
+     */
     const documentPatch = createPatch(document, (original) => function (type, listener, opts) {
         if (active && type === 'DOMContentLoaded' && QSL.LIFECYCLE.DOMREADY) {
             /**
@@ -111,7 +113,7 @@ export default function(QSL) {
 
     const windowPatch = createPatch(window, (original) => function (type, listener, opts) {
         if (active && type === 'load' && QSL.LIFECYCLE.LOADED) {
-            /* Same as above: rename now, dispatch once on completion. */
+            // Same as above: rename now, dispatch once on completion.
             type = lifecycleIterator(type, QSL.EVENTS.LOADED, true);
         }
         return original.call(this, type, listener, opts);
@@ -251,24 +253,13 @@ export default function(QSL) {
     QSL.processCompleteActions.add(function(process) {
         const events = customEvents.get(process._eventKey);
         if (events && Array.isArray(events)) {
+            /**
+             * An event is only recorded once the real one has already fired
+             * (see the patched addEventListener), so it can be dispatched now.
+             */
             for (const event of events) {
-                if (event.type === this.EVENTS.DOMREADY) {
-                    if (this.LIFECYCLE.DOMREADY) {
-                        document.dispatchEvent(new Event(event.name));
-                    } else {
-                        document.addEventListener('DOMContentLoaded', () => {
-                            document.dispatchEvent(new Event(event.name));
-                        }, { once: true });
-                    }
-                } else if (event.type === this.EVENTS.LOADED) {
-                    if (this.LIFECYCLE.LOADED) {
-                        window.dispatchEvent(new Event(event.name));
-                    } else {
-                        window.addEventListener('load', () => {
-                            window.dispatchEvent(new Event(event.name));
-                        }, { once: true });
-                    }
-                }
+                const target = event.type === this.EVENTS.DOMREADY ? document : window;
+                target.dispatchEvent(new Event(event.name));
             }
         }
     });

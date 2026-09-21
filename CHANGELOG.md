@@ -6,6 +6,163 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-21
+
+Writing the examples exercised far more of QSL than the tests did, and most of
+this release is what that turned up. The theme is that every process now ends
+in exactly one known state, and that state is reported.
+
+### Changed
+
+- **The `interaction` trigger lives in the `triggers` plugin** as
+  `interactionTrigger`, like every other built-in trigger. It used to be a
+  fallback wired into the core, which made it the one trigger the slim bundle
+  understood. In the slim bundle, `trigger: 'interaction'` and `trigger: true`
+  are now unknown and, like any unknown trigger, do not hold the process back.
+  The `qsl.waitForInteraction()` method is gone; use `trigger: 'interaction'`,
+  or write a function trigger for anything more specific.
+- **Late adds and dependency cycles are handled by the core.** Both were
+  plugins, `dynamic` and `circ`, but neither is optional behaviour: without
+  the first, a process added after `load()` silently never ran; without the
+  second, a cycle in `depends` made `load()` wait forever. The `dynamic` and
+  `circ` exports are gone — remove any `use(dynamic)` or `use(circ)`. The
+  slim bundle now handles both as well.
+- **Every process settles exactly once: completed, failed or skipped.** Each
+  fires one event — `QSL:completed`, `QSL:error` or `QSL:skipped` — and each
+  releases whatever depends on it. See the fixes below for what was broken
+  before.
+- **Built-in types reject when the resource fails to load.** They used to
+  resolve with the error, so a script that 404'd or was blocked counted as
+  completed and fired `QSL:completed`. It now fires `QSL:error`, with the
+  element's `error` event as `detail.error`. The `shadow` type rejects when
+  its container is missing, instead of resolving with an `Error`. Custom types
+  that already rejected on failure behave as before.
+- **`QSL:error` fires once per failed process, with the documented
+  `detail`.** The built-in types used to dispatch their own `QSL:error` on
+  every failure, even without `useEvents()`, with a different `detail` shape
+  (`{ tag, type, config }`). With `useEvents()` on, that meant two events per
+  failure — and a custom type that rejected made QSL's own listener throw.
+  The types no longer dispatch it; QSL logs the failure and fires `QSL:error`
+  itself, through `useEvents()` like every other lifecycle event. If you
+  listened for `QSL:error` without calling `useEvents()`, call it now.
+- **A process checks its condition again right before it runs**, after its
+  trigger has fired and its dependencies have settled. Flows already did this
+  after their trigger. A popup waiting on a delay no longer appears after the
+  visitor has left the page it was meant for.
+- **`runFlow()` starts a flow that was added with `paused: true`.** The
+  README said it would; it did nothing, because the flow stayed paused. Only
+  `runGroup()` worked, since it un-paused first.
+- **An unknown type settles the process as failed** and fires `QSL:error`.
+  It used to finish silently with no event at all.
+
+### Added
+
+- **`strict`**, on a process, on a flow, or on the instance (`qsl.strict`),
+  nearest setting wins, default `false`. A strict process is skipped when a
+  dependency failed or was skipped, without waiting for its own trigger; a
+  strict flow is skipped when a flow it depends on was skipped or had a
+  failure inside it. Skips cascade. Without `strict`, `depends` keeps its old
+  meaning: wait until the dependency has finished, however it finished.
+- `QSL:skipped` carries `detail.reason`: `'condition'`, `'dependency'` or
+  `'circular'`. `QSL:error` carries `detail.error`.
+- The logger reports skipped processes, with the reason.
+- A test suite that goes through every condition operator, trigger, type
+  and flow option, the lifecycle events, the plugin hooks and both browser
+  presets — around 300 tests, most of them tables of variations. CI now runs
+  it with coverage floors (`npm run test:coverage`).
+- Five new examples — analytics-stack, product-page, audience-targeting,
+  spa-navigation and extending — alongside consent-groups (now with
+  withdrawing consent) and legacy-domcontentloaded. Together they cover
+  nearly every option in the README.
+
+### Removed
+
+- `EVENTS.FLOW_STARTED` and `EVENTS.FLOW_COMPLETED`. Nothing ever fired them.
+- **The `simple-events` plugin.** It re-dispatched `DOMContentLoaded` and
+  `load` globally once a run completed. A dispatched event reaches every
+  listener still registered, not only the late ones, so any page code that
+  had already initialised on the real event — a theme script, a plain
+  `addEventListener('DOMContentLoaded', init)` — ran a second time, and again
+  on every later run. Only listeners registered with `{ once: true }` or that
+  remove themselves were spared. Use the `events` plugin, which renames the
+  event only for listeners registered by a late-loaded process. The
+  `simpleEvents` export is gone; importing it is now an error.
+
+### Fixed
+
+- **`tz:offset:` never matched a zone that is not a whole number of hours**
+  (India, Iran, parts of Australia): the value was read with `parseInt`.
+- **`url:query:key=value` cut the value at a second `=`,** so a value like
+  `a=b` never matched.
+- **`ua:device:mobile` matched tablets.** An iPad sends `Mobile/…` in its user
+  agent and an Android tablet sends `Android`; both counted as phones. Tablets
+  are now recognised first.
+- **`ua:os:mac` matched iPhones and iPads,** whose user agents say "like Mac
+  OS X".
+- **The `pixel` type ignored `dom: false`.** It always inserted the image into
+  `<head>`. With `dom: false` it now makes the request without inserting
+  anything, and still reports load or failure.
+- **Code that threw could hang the whole run.** A type handler that threw,
+  or returned something other than a promise; a condition or trigger function
+  that threw; a flow's `beforeStart` or `onComplete`, or a process's
+  `onComplete`, that threw — each left a process or flow unfinished, and
+  `load()` never resolved. Now a throwing handler fails the process, a
+  throwing condition fails the condition, a throwing trigger lets the flow or
+  process go ahead, and a throwing callback is logged (or, from the built-in
+  types, rethrown as an uncaught error) without affecting the run.
+- **Adding the same config object again broke it.** `add()` wrote its run
+  state onto the object it was given, so adding a stored config a second time
+  — once per route in a single-page app, say — produced a `qsl-qsl-` id and a
+  process already marked finished, which never ran and held the run open.
+  `add()` now works on a copy.
+- **A flow created during a run never started, and the run never
+  completed.** Only a process added with no flow was picked up after the run
+  had begun; `add(config, 'chat')` or `setFlowOptions({...}, 'chat')` for a
+  new flow left it waiting forever, and `load()` with it. Every flow created
+  during a run is now a late flow, with its own options respected: a paused
+  one waits for `runFlow()`, one with a trigger waits for the trigger, and
+  neither holds up the late flows after it.
+- **A process added to a flow that had already started never ran.** The
+  flow runs from the list it had when it started, so the process was pushed
+  into an array nobody read again, and the run completed without it. It now
+  gets a late flow carrying over the started flow's `condition`, `strict`,
+  `fireEvents` and `group`, and the logger reports it as `LATE_ADD`.
+- **A flow whose id contained `dynamic` was treated as a late add.** The
+  plugin recognised its own flows by that substring, so a flow named, say,
+  `dynamic-pricing` was held back until every other flow finished. Late adds
+  are now tracked by the core itself.
+- **Everything that depended on a cycle was skipped as circular too.** With
+  C depending on A, and A and B depending on each other, C was skipped along
+  with them. Only the members of a cycle are skipped now; C settles by the
+  usual rules — it runs, or with `strict` it is skipped with reason
+  `'dependency'`.
+- **A process skipped by its condition hung everything that depended on
+  it.** It returned without ever being marked as finished, so a dependent
+  waited forever and `load()` never resolved. It also never fired
+  `QSL:skipped`: the only code that set the flag behind that event was the
+  `media:` trigger, and only in browsers without `matchMedia`.
+- **A flow skipped by its condition, or broken by the `circ` plugin, left
+  its processes unsettled**, with the same result for any process in another
+  flow that depended on one of them.
+- **`pauseGroup()` did not hold a flow that was waiting for its trigger.**
+  The trigger un-paused the flow when it fired, so withdrawing consent before
+  a deferred tag's interaction arrived did not stop it. `paused` now only
+  means a pause someone asked for: a flow waiting for its trigger or its
+  dependencies is tracked separately, so neither can release a paused flow.
+  Only `runFlow()` or `runGroup()` does. Setting `depends` on a flow no longer
+  sets `paused` on it.
+- **`runGroup()` started flows before the flows they depend on had
+  finished.**
+- **`preload` never emitted anything for stylesheets.** It checked for a type
+  named `style` with an `href`; the stylesheet type is `stylesheet`.
+- **`waitForInteraction()` called back once per kind of interaction.** Each
+  event type had its own `once` listener, so a mousemove followed by a click
+  called the callback twice, and the listeners for the remaining types stayed
+  registered for the life of the page. It now calls back once and removes all
+  of them. The built-in `interaction` trigger was not affected in practice,
+  because a flow only starts once, but a function trigger or any direct caller
+  was. (The method has since been removed; see Changed.)
+
 ## [0.1.5] - 2026-09-21
 
 ### Fixed
@@ -188,7 +345,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Quietsapa/qsl/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Quietsapa/qsl/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Quietsapa/qsl/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Quietsapa/qsl/compare/v0.1.2...v0.1.3

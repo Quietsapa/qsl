@@ -1,0 +1,5 @@
+/* Loaded by QSL together with the widget, only once the section is close. */
+.reviews-list { display: grid; gap: 10px; }
+.reviews-list article { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: var(--card); }
+.reviews-list .stars { color: #e0a100; letter-spacing: 2px; }
+.reviews-list p { margin: 4px 0 0; font-size: 14px; }

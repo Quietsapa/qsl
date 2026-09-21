@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QSL example — one configuration, different visitors</title>
+
+<!--
+  THE PROBLEM
+
+  Most tags are only meant for some visitors. The ads pixel for people who
+  arrived from ads. The app banner for phones — and a different one for iOS
+  and Android. A support chat in the visitor's language. A notice for
+  European time zones. A debugging overlay only when someone asks for it.
+
+  Written by hand, every one of these becomes an if-statement wrapped around
+  a script injection, each with its own way of reading the URL, the user
+  agent or the language, scattered across templates.
+
+  THE SHAPE HERE
+
+  Every process carries a `condition`. QSL evaluates it at the moment the
+  process would run; a failing condition skips the process and reports it
+  with `QSL:skipped` and `reason: 'condition'`. The table below shows what
+  ran for you and what was skipped.
+
+  Covered: `url:` (query, regex), `lang:`, `tz:`, `ua:` (device, os,
+  browser), `media:`, a plain function, an array (all must pass), an
+  { operator: 'or' } object, and a condition on a whole flow.
+
+  Links at the top change the URL. Language, time zone and device come from
+  your browser: to try other values, override them in Chrome DevTools —
+  Sensors for location, locale and time zone, device mode for the user agent —
+  and reload.
+-->
+
+<style>
+  :root { color-scheme: light dark; --line:#d8d8dc; --muted:#6b6b76; --bg:#fff; --fg:#17171b; --card:#f6f6f8; --ok:#0a7d55; --skip:#8a6d00; }
+  @media (prefers-color-scheme: dark) { :root { --line:#33333b; --muted:#9a9aa6; --bg:#141418; --fg:#eeeef2; --card:#1d1d23; --ok:#34d399; --skip:#facc15; } }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lede { color: var(--muted); margin: 0 0 22px; }
+  h2 { font-size: 15px; margin: 28px 0 10px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  code, td, dd { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  nav { display: flex; flex-wrap: wrap; gap: 8px; }
+  nav a, nav button { font: inherit; font-size: 14px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px; color: inherit; text-decoration: none; background: none; cursor: pointer; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  dt { color: var(--muted); font-size: 13px; }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-width: 560px; }
+  th, td { text-align: left; padding: 7px 10px; border-top: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--card); border-top: 0; }
+  .completed { color: var(--ok); font-weight: 600; } .skipped { color: var(--skip); font-weight: 600; }
+  .where { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>One configuration, different visitors</h1>
+  <p class="lede">Every process below has a condition. Change the URL, or override your locale in DevTools, and reload.</p>
+
+  <nav>
+    <a href="?">No parameters</a>
+    <a href="?utm_source=ads">?utm_source=ads</a>
+    <a href="?utm_source=newsletter&amp;utm_campaign=spring-2026">?utm_source=newsletter&amp;utm_campaign=spring-2026</a>
+    <a href="?debug=1">?debug=1</a>
+    <button id="returning">Toggle “returning visitor”</button>
+  </nav>
+
+  <h2>You, as QSL sees you</h2>
+  <dl id="visitor"></dl>
+
+  <h2>What ran and what was skipped</h2>
+  <p class="hint">Rows appear in the order QSL settled them. “flow” in the last column means the condition sits on the flow, not the process.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>process</th><th>result</th><th>condition</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+/**
+ * Demo plumbing: a flag the function condition below reads. Wrapped in
+ * try/catch because storage can be unavailable (private mode, file://
+ * settings), and a condition should never throw.
+ */
+function isReturningVisitor() {
+  try { return localStorage.getItem('qsl-demo-returning') === '1'; } catch (e) { return false; }
+}
+document.getElementById('returning').addEventListener('click', function () {
+  try { localStorage.setItem('qsl-demo-returning', isReturningVisitor() ? '0' : '1'); } catch (e) {}
+  location.reload();
+});
+
+/**
+ * Demo plumbing: show the inputs the conditions read.
+ */
+(function () {
+  var facts = {
+    'language': navigator.language,
+    'time zone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+    'UTC offset': String(-new Date().getTimezoneOffset() / 60),
+    'viewport': window.innerWidth + ' px',
+    'reduced motion': matchMedia('(prefers-reduced-motion: reduce)').matches ? 'yes' : 'no',
+    'returning visitor': isReturningVisitor() ? 'yes' : 'no',
+    'query': location.search || '(none)',
+    'user agent': navigator.userAgent
+  };
+  var html = '';
+  for (var key in facts) html += '<dt>' + key + '</dt><dd></dd>';
+  var dl = document.getElementById('visitor');
+  dl.innerHTML = html;
+  Object.keys(facts).forEach(function (key, i) { dl.querySelectorAll('dd')[i].textContent = facts[key]; });
+})();
+
+window.QSLReady = function () {
+  var qsl = window.__QSL__;
+
+  /**
+   * Demo plumbing: one row per settled process, with the condition that
+   * decided it. The event detail carries the whole process config.
+   */
+  function describe(condition) {
+    if (typeof condition === 'function') return 'function ' + (condition.name || '(anonymous)');
+    return JSON.stringify(condition);
+  }
+  qsl.useEvents();
+  ['completed', 'skipped'].forEach(function (name) {
+    window.addEventListener('QSL:' + name, function (e) {
+      var d = e.detail;
+      var onFlow = d.condition == null;
+      var condition = onFlow ? qsl.flowOptions.get(d.flowId).condition : d.condition;
+      var row = document.createElement('tr');
+      row.innerHTML = '<td></td><td class="' + name + '">' + (name === 'completed' ? 'ran' : 'skipped') + '</td><td></td>';
+      row.cells[0].textContent = d.id.replace(/^qsl-/, '');
+      row.cells[2].textContent = describe(condition) + (onFlow ? '  (flow)' : '');
+      document.getElementById('rows').appendChild(row);
+    });
+  });
+
+  /**
+   * Every process uses the built-in `console` type so this page works
+   * offline; `message` goes to the browser console. In a real integration
+   * each is a { type: 'script', src: ... } or a pixel.
+   */
+
+  /**
+   * ── traffic source: the URL ───────────────────────────────────────────
+   */
+  qsl.add({
+    id: 'ads-landing-pixel',
+    message: 'ads pixel',
+    condition: 'url:query:utm_source=ads'
+  });
+
+  qsl.add({
+    id: 'newsletter-welcome',
+    message: 'welcome back from the newsletter',
+    condition: 'url:query:utm_source=newsletter'
+  });
+
+  /**
+   * A regular expression over the full URL: any spring campaign, any year.
+   */
+  qsl.add({
+    id: 'spring-campaign',
+    message: 'spring campaign creative',
+    condition: 'url:matches:utm_campaign=spring-\\d{4}'
+  });
+
+  /**
+   * ── language and time zone ────────────────────────────────────────────
+   */
+
+  /**
+   * 'or': a Russian-language browser, or someone in Moscow's time zone.
+   */
+  qsl.add({
+    id: 'russian-support-chat',
+    message: 'support chat in Russian',
+    condition: { operator: 'or', conditions: ['lang:startsWith:ru', 'tz:is:Europe/Moscow'] }
+  });
+
+  qsl.add({
+    id: 'eu-privacy-notice',
+    message: 'EU privacy notice',
+    condition: 'tz:contains:Europe'
+  });
+
+  qsl.add({
+    id: 'north-america-shipping',
+    message: 'US and Canada shipping banner',
+    condition: 'lang:in:en-US,en-CA,fr-CA'
+  });
+
+  /**
+   * ── device ────────────────────────────────────────────────────────────
+   */
+
+  /**
+   * An array: every condition in it must pass.
+   */
+  qsl.add({
+    id: 'ios-app-banner',
+    message: 'App Store banner',
+    condition: ['ua:device:mobile', 'ua:os:ios']
+  });
+
+  qsl.add({
+    id: 'android-app-banner',
+    message: 'Google Play banner',
+    condition: ['ua:device:mobile', 'ua:os:android']
+  });
+
+  /**
+   * 'and' spelled out is the same as an array. The media query is checked
+   * once, when the process runs; for "load it when the window becomes wide"
+   * use media: as a trigger instead (see the product-page example).
+   */
+  qsl.add({
+    id: 'desktop-shortcuts',
+    message: 'keyboard shortcuts overlay',
+    condition: { operator: 'and', conditions: ['ua:device:desktop', 'media:(min-width: 1024px)'] }
+  });
+
+  qsl.add({
+    id: 'safari-date-polyfill',
+    message: 'Safari workaround',
+    condition: 'ua:browser:safari'
+  });
+
+  qsl.add({
+    id: 'animated-hero',
+    message: 'hero animation',
+    condition: 'media:(prefers-reduced-motion: no-preference)'
+  });
+
+  /**
+   * ── anything else: a function ─────────────────────────────────────────
+   */
+  qsl.add({
+    id: 'returning-visitor-offer',
+    message: '10% off for returning visitors',
+    condition: isReturningVisitor
+  });
+
+  /**
+   * ── a condition on a whole flow ───────────────────────────────────────
+   */
+  qsl.setFlowOptions({ condition: 'url:query:debug' }, 'debug');
+
+  qsl.add({ id: 'debug-overlay', message: 'debug overlay' }, 'debug');
+  qsl.add({ id: 'performance-marks', message: 'performance marks' }, 'debug');
+
+  qsl.load();
+};
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl@0.2/dist/qsl.min.js?async=true"></script>
+</body>
+</html>

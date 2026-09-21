@@ -13,17 +13,24 @@ const log = (detail) => {
 }
 
 /**
- * Log an error.
+ * Resolve the process, then run its onComplete. An onComplete that throws is
+ * rethrown on its own tick: it shows up as an uncaught error, but it cannot
+ * leave the process unsettled or be mistaken for a load failure.
  */
-const error = (detail) => {
-    window.dispatchEvent(new CustomEvent('QSL:error', { detail }));
+const complete = (resolve, onComplete) => {
+    resolve?.();
+    try {
+        onComplete?.();
+    } catch (e) {
+        setTimeout(() => { throw e; });
+    }
 }
 
 /**
  * Render an element.
  */
 const render = (config, callbacks = {}) => {
-    return new Promise(async (resolve) => {
+    return new Promise(async (resolve, reject) => {
         const { flowId, tag, id, delay, data, onBeforeStart, onComplete, onError, footer, dom, onElement, onCustomResolve } = config;
         if (!flowId || !tag || !id) {
             resolve();
@@ -47,23 +54,20 @@ const render = (config, callbacks = {}) => {
             if (!onCustomResolve) {
                 el.onload = () => {
                     log({ tag, type: 'PROCESS_COMPLETED', config });
-                    onComplete?.();
-                    resolve();
+                    complete(resolve, onComplete);
                 };
             }
             el.onerror = (e) => {
-                error({ tag, type: 'PROCESS_FAILED', config });
                 onError?.(e);
-                resolve(e);
+                reject(e);
             };
             if (dom) {
                 (footer ? document.body : document.head).appendChild(el);
             }
-            onCustomResolve?.({ el, config, resolve });
+            onCustomResolve?.({ el, config, resolve, reject });
         } catch (e) {
-            error({ tag, type: 'PROCESS_FAILED', config, error: e });
             onError?.(e);
-            resolve(e);
+            reject(e);
         }
     });
 }
@@ -80,8 +84,7 @@ const InlineScript = {
         const resolveProcess = () => {
             log({ tag: 'inline-script', type: 'INLINE_SCRIPT_SUCCESS', config });
             log({ tag: 'inline-script', type: 'PROCESS_COMPLETED', config });
-            config?.onComplete?.();
-            storedResolve?.();
+            complete(storedResolve, config?.onComplete);
         };
         const normalizedConfig = {
             ...config,
@@ -171,8 +174,7 @@ const InlineStyle = {
                 const { tag, onComplete } = config;
                 log({ tag, type: 'INLINE_STYLE_SUCCESS', config });
                 log({ tag, type: 'PROCESS_COMPLETED', config });
-                onComplete?.();
-                resolve();
+                complete(resolve, onComplete);
             }
         }, callbacks);
     }
@@ -206,9 +208,13 @@ const Pixel = {
         return render({
             ...config,
             tag: 'img',
-            dom: true,
-            onElement: (el, { style = { display: 'none' }, dom, src, bypassCache }) => {
-                if ( ! dom ) el = new window.Image();
+            /**
+             * In the document by default. With `dom: false` the image is
+             * never inserted: a detached <img> still makes the request and
+             * still reports load or error.
+             */
+            dom: config.dom !== false,
+            onElement: (el, { style = { display: 'none' }, src, bypassCache }) => {
                 el.src = src + bypassSuffix(src, bypassCache);
                 el.width = 1;
                 el.height = 1;
@@ -219,14 +225,12 @@ const Pixel = {
                 }
             },
             onCustomResolve: ({ el, config, resolve }) => {
-                const { tag, dom, onComplete } = config;
-                const resolver = () => {
+                const { tag, onComplete } = config;
+                el.onload = () => {
                     log({ tag, type: 'IMAGE_LOADED', config });
                     log({ tag, type: 'PROCESS_COMPLETED', config });
-                    onComplete?.();
-                    resolve();
+                    complete(resolve, onComplete);
                 };
-                ! dom ? resolver() : el.onload = () => resolver();
             }
         }, callbacks);
     }
@@ -245,7 +249,7 @@ const Shadow = {
                 el.data = shadowData || {};
                 if (shadowData?.hidden) el.setAttribute('hidden', '');    
             },
-            onCustomResolve: ({ el, config, resolve }) => {
+            onCustomResolve: ({ el, config, resolve, reject }) => {
                 const { tag, shadowData, onComplete, onError } = config;
                 const resolver = () => {
                     const selector = shadowData?.container;
@@ -261,16 +265,14 @@ const Shadow = {
                     }
                     if (!container) {
                         const err = new Error(`Container not found: ${selector}`);
-                        error({ tag, type: 'SHADOW_FAILED', config, error: err });
                         onError?.(err);
-                        resolve(err);
+                        reject(err);
                         return;
                     }
                     shadowData?.position === 'top' ? container.insertBefore(el, container.firstChild) : container.appendChild(el);
                     log({ tag, type: 'SHADOW_SUCCESS', config });
                     log({ tag, type: 'PROCESS_COMPLETED', config });
-                    onComplete?.();
-                    resolve();
+                    complete(resolve, onComplete);
                 };
                 if (document.readyState === 'interactive' || document.readyState === 'complete') {
                     resolver();
@@ -305,8 +307,7 @@ const HTML = {
                 const { tag, onComplete } = config;
                 log({ tag, type: 'HTML_SUCCESS', config });
                 log({ tag, type: 'PROCESS_COMPLETED', config });
-                onComplete?.();
-                resolve();
+                complete(resolve, onComplete);
             }
         }, callbacks);
     }

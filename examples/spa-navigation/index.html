@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QSL example — tags in a single-page app</title>
+
+<!--
+  THE PROBLEM
+
+  In a single-page app the document loads once and every later "page" is a
+  route change. Tags written for ordinary sites assume the opposite:
+
+    - a page view must be sent on every route, not once;
+    - a tag that belongs to one route must not run on the others — and must
+      not run late on the wrong route because the visitor moved on while it
+      was waiting;
+    - a vendor script that waits for DOMContentLoaded never initialises,
+      because that event fired once, at the very beginning;
+    - route content renders after a fetch, so "the element the tag needs"
+      does not exist yet when the route changes.
+
+  THE SHAPE HERE
+
+  On every route change the page adds the tags that route needs and calls
+  load(). QSL runs, completes and resets, ready for the next route. Ids
+  repeat from run to run, which is fine.
+
+  Two different questions, answered in two places. Which tags does a route
+  need? The router knows, so addTagsFor(route) decides. Is the visitor still
+  on that route when a tag finally runs? Only the moment of running can tell,
+  so each route-specific tag carries a condition. The page view has no
+  condition and records the route it was added for: the visit happened, even
+  if the visitor has moved on by the time it is sent.
+
+  Things to try:
+
+    - Visit Product several times. reviews.js registers a DOMContentLoaded
+      listener every time, and the events plugin runs it every time — once.
+    - Go Home, then click Product within 1.5 s. The home run is still waiting
+      on the newsletter popup, so the product tags are deferred until it
+      settles: processes added during a run wait for its regular flows.
+      When the popup's trigger fires, its condition is checked again — you
+      are no longer on Home, so it is skipped instead of popping up over the
+      product.
+    - Open Product and leave before the card renders. The reviews tag waits
+      for the card or 3 s, whichever comes first, and is then skipped. In an
+      SPA every wait needs a way out, or one abandoned route holds up the
+      next run for good.
+-->
+
+<style>
+  :root { color-scheme: light dark; --line:#d8d8dc; --muted:#6b6b76; --bg:#fff; --fg:#17171b; --card:#f6f6f8; --ok:#0a7d55; --skip:#8a6d00; --run:#2d7ff9; }
+  @media (prefers-color-scheme: dark) { :root { --line:#33333b; --muted:#9a9aa6; --bg:#141418; --fg:#eeeef2; --card:#1d1d23; --ok:#34d399; --skip:#facc15; --run:#60a5fa; } }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+  main { max-width: 900px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lede { color: var(--muted); margin: 0 0 20px; }
+  h2 { font-size: 15px; margin: 26px 0 10px; }
+  nav { display: flex; gap: 8px; }
+  nav a { padding: 7px 14px; border: 1px solid var(--line); border-radius: 6px; color: inherit; text-decoration: none; }
+  nav a.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  #view { margin-top: 16px; min-height: 120px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  .product-card .reviews { color: var(--muted); font-size: 14px; }
+  ul.log { border: 1px solid var(--line); border-radius: 8px; padding: 0; margin: 0; list-style: none; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  ul.log li { padding: 6px 12px; border-top: 1px solid var(--line); }
+  ul.log li:first-child { border-top: 0; }
+  ul.log li.nav { background: var(--card); font-weight: 600; }
+  .t { color: var(--muted); margin-right: 10px; }
+  .completed { color: var(--ok); } .skipped { color: var(--skip); } .run { color: var(--run); }
+  .popup { position: fixed; right: 16px; bottom: 16px; max-width: 280px; padding: 14px 16px; border-radius: 10px; background: var(--fg); color: var(--bg); font-size: 14px; }
+  .popup button { float: right; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tags in a single-page app</h1>
+  <p class="lede">Navigate around. Each route change is one QSL run.</p>
+
+  <nav>
+    <a href="#/home">Home</a>
+    <a href="#/product">Product</a>
+    <a href="#/checkout">Checkout</a>
+  </nav>
+  <div id="view"></div>
+
+  <h2>Log</h2>
+  <ul class="log" id="log"></ul>
+</main>
+
+<script>
+/**
+ * Demo plumbing: the log the vendor stubs in ./vendor write to.
+ */
+(function () {
+  var started = Date.now();
+  window.demoNote = function (source, message, className) {
+    var li = document.createElement('li');
+    if (className) li.className = className;
+    li.innerHTML = '<span class="t">+' + String(Date.now() - started).padStart(5, '0') + 'ms</span><strong></strong> — <span></span>';
+    li.querySelector('strong').textContent = source;
+    li.lastChild.textContent = message;
+    document.getElementById('log').appendChild(li);
+  };
+})();
+
+/**
+ * The app's router, not QSL: renders a view per hash route. The product
+ * view fetches its data first, so the card shows up 400 ms after the route
+ * changes.
+ */
+function renderView(route) {
+  var view = document.getElementById('view');
+  document.querySelectorAll('nav a').forEach(function (a) {
+    a.className = a.getAttribute('href') === route ? 'on' : '';
+  });
+  document.querySelectorAll('.popup').forEach(function (p) { p.remove(); });
+
+  if (route === '#/product') {
+    view.innerHTML = 'Loading product…';
+    setTimeout(function () {
+      if (location.hash !== '#/product') return;
+      view.innerHTML = '<div class="product-card"><strong>Trail runner</strong> · €129' +
+                       '<div class="reviews">loading reviews…</div></div>';
+    }, 400);
+  } else if (route === '#/checkout') {
+    view.innerHTML = '<strong>Checkout</strong><br>Card details would go here.';
+  } else {
+    view.innerHTML = '<strong>Home</strong><br>A newsletter popup is due in 1.5 s — if you are still here.';
+  }
+}
+
+window.QSLReady = function () {
+  var qsl = window.__QSL__;
+  var runNumber = 0;
+
+  /**
+   * Demo plumbing: log how each process settled.
+   */
+  qsl.useEvents();
+  window.addEventListener('QSL:completed', function (e) {
+    window.demoNote(e.detail.id.replace(/^qsl-/, ''), 'completed', 'completed');
+  });
+  window.addEventListener('QSL:skipped', function (e) {
+    window.demoNote(e.detail.id.replace(/^qsl-/, ''), 'skipped (' + e.detail.reason + ')', 'skipped');
+  });
+
+  /**
+   * The tags a route needs. `route` is always one of the three known values
+   * (see onRouteChange), which matters: it is written into inline code, and
+   * QSL configuration must never contain text a visitor can control.
+   */
+  function addTagsFor(route) {
+    qsl.add({
+      id: 'page-view',
+      type: 'inline-script',
+      code: "window.demoNote('analytics', 'page view " + route + "');"
+    });
+
+    /**
+     * A condition is checked when the process starts and again after its
+     * trigger fires. The second check is what keeps a popup queued on Home
+     * from appearing on whatever route the visitor is on 1.5 s later.
+     */
+    if (route === '#/home') qsl.add({
+      id: 'newsletter-popup',
+      type: 'html',
+      tag: 'div',
+      className: 'popup',
+      html: '<button onclick="this.parentNode.remove()">×</button>Get 10% off your first order — join the newsletter.',
+      footer: true,
+      condition: 'url:matches:#/home$',
+      trigger: 'delay:1500'
+    });
+
+    /**
+     * Waits for the card the tag renders into, with a timeout as the way
+     * out if the visitor leaves before it appears.
+     */
+    if (route === '#/product') qsl.add({
+      id: 'reviews',
+      type: 'script',
+      src: './vendor/reviews.js',
+      condition: 'url:matches:#/product$',
+      trigger: { operator: 'or', triggers: ['appears:.product-card', 'delay:3000'] }
+    });
+
+    if (route === '#/checkout') qsl.add({
+      id: 'fraud-check',
+      type: 'script',
+      src: './vendor/fraud-check.js',
+      condition: 'url:matches:#/checkout$'
+    });
+  }
+
+  var routes = ['#/home', '#/product', '#/checkout'];
+
+  function onRouteChange() {
+    /**
+     * Unknown or empty hash: go home. Setting it fires hashchange, which
+     * lands back here with a known route.
+     */
+    if (routes.indexOf(location.hash) === -1) {
+      location.hash = '#/home';
+      return;
+    }
+    var route = location.hash;
+    window.demoNote('router', 'navigated to ' + route, 'nav');
+    renderView(route);
+
+    /**
+     * hasStarted is true while a run is in progress. Processes added now,
+     * without a flow, are held back and run as soon as the
+     * current run's own flows have finished — nothing is dropped, and
+     * nothing runs twice.
+     */
+    if (qsl.hasStarted) {
+      window.demoNote('qsl', 'run #' + runNumber + ' still in progress — these tags join it and wait', 'run');
+      addTagsFor(route);
+      return;
+    }
+
+    runNumber++;
+    var thisRun = runNumber;
+    addTagsFor(route);
+
+    /**
+     * reset() clears the completion callback along with the rest of the
+     * run state, so it is set again for every run.
+     */
+    qsl.setOnAllComplete(function () {
+      window.demoNote('qsl', 'run #' + thisRun + ' complete, state reset for the next route', 'run');
+    });
+
+    window.demoNote('qsl', 'run #' + thisRun + ' started', 'run');
+    qsl.load();
+  }
+
+  window.addEventListener('hashchange', onRouteChange);
+  onRouteChange();
+};
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl@0.2/dist/qsl.min.js?async=true"></script>
+</body>
+</html>

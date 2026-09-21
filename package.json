@@ -1,6 +1,6 @@
 {
   "name": "@quietsapa/qsl",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Dependency-aware orchestration runtime for third-party scripts, styles, pixels and custom elements in the browser.",
   "type": "module",
   "license": "Apache-2.0",
@@ -35,10 +35,12 @@
     "build": "vite build --mode esm && vite build --mode browser && vite build --mode browser-slim",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "check:version": "node scripts/check-version.js",
     "prepublishOnly": "npm run check:version && npm test && npm run build"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^2.1.9",
     "happy-dom": "^15.11.0",
     "terser": "^5.36.0",
     "vite": "^5.4.0",

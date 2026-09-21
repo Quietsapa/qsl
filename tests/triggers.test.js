@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+    interactionTrigger,
+    loadTrigger,
+    idleTrigger,
     delayTrigger,
     domReadyTrigger,
     hoverTrigger,
@@ -32,8 +35,10 @@ describe('delay trigger', () => {
 
 describe('domready trigger', () => {
     it('fires immediately when the document is already interactive', async () => {
-        /* DOMContentLoaded has already fired at this point, so a listener
-           registered now would never run. */
+        /**
+         * DOMContentLoaded has already fired at this point, so a listener
+         * registered now would never run.
+         */
         vi.spyOn(document, 'readyState', 'get').mockReturnValue('interactive');
 
         const trigger = resolveTrigger(domReadyTrigger, 'domready');
@@ -155,3 +160,220 @@ describe('media trigger', () => {
         expect(fired).toBe(true);
     });
 });
+
+describe('interaction trigger', () => {
+    it('handles both the string and true', () => {
+        expect(resolveTrigger(interactionTrigger, 'interaction')).toBeTypeOf('function');
+        expect(resolveTrigger(interactionTrigger, true)).toBeTypeOf('function');
+        expect(resolveTrigger(interactionTrigger, 'idle')).toBeNull();
+    });
+
+    it('calls back once for the first interaction of any kind', () => {
+        let calls = 0;
+        resolveTrigger(interactionTrigger, 'interaction')(() => calls++);
+
+        for (const type of ['mousemove', 'click', 'keydown', 'wheel']) {
+            window.dispatchEvent(new Event(type));
+        }
+
+        expect(calls).toBe(1);
+    });
+});
+
+describe('every trigger handler', () => {
+    it.each([
+        ['interaction', interactionTrigger, 'idle'],
+        ['load', loadTrigger, 'domready'],
+        ['idle', idleTrigger, 'load'],
+        ['domready', domReadyTrigger, 'load'],
+        ['delay', delayTrigger, 'hover:#x'],
+        ['hover', hoverTrigger, 'visible:#x'],
+        ['visible', visibleTrigger, 'appears:#x'],
+        ['appears', appearsTrigger, 'media:(min-width: 1px)'],
+        ['media', mediaQueryTrigger, 'delay:10'],
+    ])('%s ignores options it does not own', (_, handler, foreign) => {
+        expect(resolveTrigger(handler, foreign)).toBeNull();
+        expect(resolveTrigger(handler, () => {})).toBeNull();
+        expect(resolveTrigger(handler, { operator: 'or', triggers: [] })).toBeNull();
+    });
+});
+
+describe('load trigger', () => {
+    it('fires at once when the page has already loaded', () => {
+        vi.spyOn(document, 'readyState', 'get').mockReturnValue('complete');
+        let fired = false;
+        resolveTrigger(loadTrigger, 'load')(() => { fired = true; });
+        expect(fired).toBe(true);
+    });
+
+    it('waits for the window load event otherwise', () => {
+        vi.spyOn(document, 'readyState', 'get').mockReturnValue('interactive');
+        let fired = false;
+        resolveTrigger(loadTrigger, 'load')(() => { fired = true; });
+        expect(fired).toBe(false);
+
+        window.dispatchEvent(new Event('load'));
+        expect(fired).toBe(true);
+    });
+});
+
+describe('domready trigger, before the document is parsed', () => {
+    it('waits for DOMContentLoaded', () => {
+        vi.spyOn(document, 'readyState', 'get').mockReturnValue('loading');
+        let fired = false;
+        resolveTrigger(domReadyTrigger, 'domready')(() => { fired = true; });
+        expect(fired).toBe(false);
+
+        document.dispatchEvent(new Event('DOMContentLoaded'));
+        expect(fired).toBe(true);
+    });
+});
+
+describe('idle trigger', () => {
+    it('uses requestIdleCallback when there is one', () => {
+        let scheduled = null;
+        vi.stubGlobal('requestIdleCallback', (cb) => { scheduled = cb; });
+
+        let fired = false;
+        resolveTrigger(idleTrigger, 'idle')(() => { fired = true; });
+        expect(fired).toBe(false);
+
+        scheduled();
+        expect(fired).toBe(true);
+    });
+
+    it('falls back to a 200 ms timeout without it', () => {
+        vi.useFakeTimers();
+        try {
+            vi.stubGlobal('requestIdleCallback', undefined);
+            let fired = false;
+            resolveTrigger(idleTrigger, 'idle')(() => { fired = true; });
+
+            vi.advanceTimersByTime(199);
+            expect(fired).toBe(false);
+            vi.advanceTimersByTime(1);
+            expect(fired).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe('delay trigger, odd values', () => {
+    it.each([
+        ['delay:abc'],
+        ['delay:'],
+        ['delay:-50'],
+    ])('%s fires on the next tick', (opt) => {
+        vi.useFakeTimers();
+        try {
+            let fired = false;
+            resolveTrigger(delayTrigger, opt)(() => { fired = true; });
+            expect(fired).toBe(false);
+            vi.advanceTimersByTime(0);
+            expect(fired).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe('selector triggers', () => {
+    it.each([
+        ['hover:', hoverTrigger],
+        ['visible:', visibleTrigger],
+        ['appears:', appearsTrigger],
+    ])('%s with an invalid selector fires at once rather than hanging', (prefix, handler) => {
+        let fired = false;
+        resolveTrigger(handler, prefix + '[[[')(() => { fired = true; });
+        expect(fired).toBe(true);
+    });
+
+    it('hover waits for an element that is inserted later', async () => {
+        let fired = false;
+        resolveTrigger(hoverTrigger, 'hover:#late')(() => { fired = true; });
+
+        const el = document.createElement('button');
+        el.id = 'late';
+        document.body.appendChild(el);
+        await waitFor(() => document.getElementById('late'));
+        await new Promise((r) => setTimeout(r, 0));
+
+        el.dispatchEvent(new Event('mouseover', { bubbles: true }));
+        expect(fired).toBe(true);
+    });
+
+    it('hover fires only once', () => {
+        document.body.innerHTML = '<button id="b"></button>';
+        let calls = 0;
+        resolveTrigger(hoverTrigger, 'hover:#b')(() => calls++);
+
+        const el = document.getElementById('b');
+        el.dispatchEvent(new Event('mouseover'));
+        el.dispatchEvent(new Event('mouseover'));
+        expect(calls).toBe(1);
+    });
+
+    it('visible fires at once without IntersectionObserver', () => {
+        document.body.innerHTML = '<div id="t"></div>';
+        vi.stubGlobal('IntersectionObserver', undefined);
+        let fired = false;
+        resolveTrigger(visibleTrigger, 'visible:#t')(() => { fired = true; });
+        expect(fired).toBe(true);
+    });
+
+    it('visible ignores entries that are not intersecting', () => {
+        document.body.innerHTML = '<div id="t"></div>';
+        let callback = null;
+        vi.stubGlobal('IntersectionObserver', class { constructor(cb) { callback = cb; } observe() {} disconnect() {} });
+
+        let fired = false;
+        resolveTrigger(visibleTrigger, 'visible:#t')(() => { fired = true; });
+        callback([{ isIntersecting: false }]);
+        expect(fired).toBe(false);
+        callback([{ isIntersecting: false }, { isIntersecting: true }]);
+        expect(fired).toBe(true);
+    });
+});
+
+describe('media trigger, edge cases', () => {
+    it('ignores a change that does not match', () => {
+        let changeHandler = null;
+        vi.stubGlobal('matchMedia', () => ({
+            matches: false,
+            addEventListener(_, handler) { changeHandler = handler; },
+            removeEventListener() {},
+        }));
+
+        let fired = false;
+        resolveTrigger(mediaQueryTrigger, 'media:(min-width: 768px)', {})(() => { fired = true; });
+        changeHandler({ matches: false });
+        expect(fired).toBe(false);
+    });
+
+    it.each([
+        ['an empty query', 'media:', true],
+        ['no matchMedia', 'media:(min-width: 1px)', false],
+    ])('marks the process skipped with %s', (_, opt, hasMatchMedia) => {
+        if (!hasMatchMedia) vi.stubGlobal('matchMedia', undefined);
+        const process = {};
+        let fired = false;
+        resolveTrigger(mediaQueryTrigger, opt, process)(() => { fired = true; });
+        expect(fired).toBe(true);
+        expect(process.skipped).toBe(true);
+    });
+});
+
+describe('selector triggers without MutationObserver', () => {
+    it.each([
+        ['hover:#absent', hoverTrigger],
+        ['visible:#absent', visibleTrigger],
+        ['appears:#absent', appearsTrigger],
+    ])('%s fires at once rather than waiting forever', (opt, handler) => {
+        vi.stubGlobal('MutationObserver', undefined);
+        let fired = false;
+        resolveTrigger(handler, opt)(() => { fired = true; });
+        expect(fired).toBe(true);
+    });
+});
+

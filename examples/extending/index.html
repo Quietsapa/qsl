@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QSL example — extending QSL, and seeing what it did</title>
+
+<!--
+  THE PROBLEM
+
+  Sooner or later the built-ins are not enough. A tag needs a resource QSL
+  has no type for. A rule needs a trigger or a condition QSL does not ship.
+  And once a site runs dozens of tags, someone asks how long each one took,
+  which were skipped and why, and what happened to the one somebody
+  misconfigured.
+
+  THE SHAPE HERE
+
+  Extension points, each used once:
+
+    registerType('iframe')           a resource type with its own completion
+    registerType('wait-for-global')  "done" means a global exists, not "loaded"
+    use(networkAware)                a plugin adding the string forms
+                                     'network:fast' (condition) and
+                                     'scroll:60' (trigger)
+    setLogger()                      QSL's own log, into the panel on the page
+    useEvents()                      timings per process, for your monitoring
+    autoReset = false                inspect flow state after the run
+
+  Plus the flow controls that only make sense with something to click:
+  a flow held with `paused` until runFlow(), and `priority` to put one CMS
+  snippet ahead of the others without reordering them.
+
+  The "misconfigured" block is deliberate: a dependency cycle, a typo in a
+  dependency name and a type that does not exist. None of them hangs the run.
+  Read what the logger says about each.
+-->
+
+<style>
+  :root { color-scheme: light dark; --line:#d8d8dc; --muted:#6b6b76; --bg:#fff; --fg:#17171b; --card:#f6f6f8;
+          --ok:#0a7d55; --bad:#b91c1c; --skip:#8a6d00; --run:#2d7ff9; }
+  @media (prefers-color-scheme: dark) { :root { --line:#33333b; --muted:#9a9aa6; --bg:#141418; --fg:#eeeef2; --card:#1d1d23;
+          --ok:#34d399; --bad:#f87171; --skip:#facc15; --run:#60a5fa; } }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lede { color: var(--muted); margin: 0 0 20px; }
+  h2 { font-size: 15px; margin: 28px 0 10px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .mono, code, td, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  button { font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--fg); background: var(--fg); color: var(--bg); cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  #map { margin-top: 10px; }
+  #map iframe { width: 100%; height: 120px; border: 1px solid var(--line); border-radius: 8px; }
+  #comments { min-height: 40px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); }
+  .spacer { height: 700px; border: 1px dashed var(--line); border-radius: 8px; margin: 14px 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-width: 560px; }
+  th, td { text-align: left; padding: 6px 10px; border-top: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--card); border-top: 0; font-family: inherit; }
+  .bar { position: relative; height: 10px; background: var(--card); border-radius: 3px; min-width: 160px; }
+  .bar i { position: absolute; top: 0; bottom: 0; border-radius: 3px; min-width: 3px; }
+  .completed { color: var(--ok); } .error { color: var(--bad); } .skipped { color: var(--skip); } .started { color: var(--run); }
+  .bar i.completed { background: var(--ok); } .bar i.error { background: var(--bad); } .bar i.skipped { background: var(--skip); } .bar i.started { background: var(--run); }
+  pre { margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); overflow: auto; max-height: 300px; }
+  pre .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Extending QSL, and seeing what it did</h1>
+  <p class="lede">Custom types, a plugin, a logger and timings. Click “Show the map” and scroll down to finish the run.</p>
+
+  <h2>A flow held until you ask for it</h2>
+  <p class="hint">The map is an <code>iframe</code> — a custom type. Its flow is <code>paused</code>; the button calls <code>runFlow('map')</code>.</p>
+  <button id="show-map">Show the map</button>
+  <div id="map"></div>
+
+  <h2>Timings</h2>
+  <p class="hint">From <code>QSL:started</code> to how each process settled. This is what you would send to your monitoring.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>process</th><th>result</th><th>ms</th><th>timeline</th></tr></thead>
+      <tbody id="timings"></tbody>
+    </table>
+  </div>
+
+  <h2>What the logger said</h2>
+  <pre id="logger"></pre>
+
+  <h2>Flow state after the run</h2>
+  <p class="hint">Only readable because <code>autoReset</code> is off. Filled in when the run completes.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>flow</th><th>status</th><th>outcome</th></tr></thead>
+      <tbody id="flows"><tr><td colspan="3">run still in progress…</td></tr></tbody>
+    </table>
+  </div>
+  <p><button id="reset" disabled>reset()</button></p>
+
+  <div class="spacer">keep scrolling — comments load at 60% of the page, if your connection is fast</div>
+  <h2>Comments</h2>
+  <div id="comments">Comments load here.</div>
+</main>
+
+<script>
+/**
+ * ── A plugin ─────────────────────────────────────────────────────────────
+ * A plugin is a function that receives QSL and registers handlers. Handlers
+ * see every condition or trigger option and return null for the ones that
+ * are not theirs, so string forms from different plugins coexist.
+ *
+ * Condition handlers return true when the condition FAILS — "skip it".
+ */
+function networkAware(qsl) {
+  qsl.conditionHandlers.add(function (opt) {
+    if (opt !== 'network:fast') return null;
+    var connection = navigator.connection;
+    /**
+     * unknown: do not hold anything back
+     */
+    if (!connection) return false;
+    return connection.saveData === true || /2g/.test(connection.effectiveType);
+  });
+
+  qsl.triggerHandlers.add(function (opt) {
+    if (typeof opt !== 'string' || opt.indexOf('scroll:') !== 0) return null;
+    var percent = parseInt(opt.slice('scroll:'.length), 10);
+    return function (cb) {
+      function check() {
+        var max = document.documentElement.scrollHeight - window.innerHeight;
+        if (max <= 0 || (window.scrollY / max) * 100 >= percent) {
+          window.removeEventListener('scroll', check);
+          cb();
+        }
+      }
+      window.addEventListener('scroll', check, { passive: true });
+      check();
+    };
+  });
+}
+
+window.QSLReady = function () {
+  var qsl = window.__QSL__;
+
+  /**
+   * ── Logger ─────────────────────────────────────────────────────────────
+   * The full bundle comes with a console logger. setLogger() replaces it;
+   * here the lines go into the panel on the page as well.
+   */
+  var loggerPanel = document.getElementById('logger');
+  function writeLog(kind, type, args) {
+    var line = document.createElement('span');
+    if (kind === 'error') line.className = 'err';
+    line.textContent = type + ' ' + args.map(function (a) {
+      if (a instanceof Event) return '[' + a.type + ' event]';
+      if (a instanceof Error) return a.message;
+      return typeof a === 'object' ? JSON.stringify(a) : String(a);
+    }).join(' ') + '\n';
+    loggerPanel.appendChild(line);
+  }
+  qsl.setLogger({
+    log: function (type) { writeLog('log', type, [].slice.call(arguments, 1)); },
+    error: function (type) { writeLog('error', type, [].slice.call(arguments, 1)); }
+  });
+
+  qsl.use(networkAware);
+
+  /**
+   * ── Types ──────────────────────────────────────────────────────────────
+   * A type is a function that takes the process and returns a promise.
+   * Resolve when the resource is ready; reject when it failed, and the
+   * process settles as failed (QSL:error, and `strict` dependents skip).
+   * Calling onComplete / onError is the type's job, as in the built-ins.
+   */
+  qsl.registerType('iframe', function (process) {
+    return new Promise(function (resolve, reject) {
+      var frame = document.createElement('iframe');
+      frame.title = process.title || '';
+      frame.srcdoc = process.srcdoc;
+      var timer = setTimeout(function () {
+        var error = new Error('iframe timed out');
+        if (process.onError) process.onError(error);
+        reject(error);
+      }, process.timeout || 10000);
+      frame.onload = function () {
+        clearTimeout(timer);
+        if (process.onComplete) process.onComplete();
+        resolve();
+      };
+      document.querySelector(process.container).appendChild(frame);
+    });
+  });
+
+  /**
+   * Many vendor scripts finish loading long before they are usable: they
+   * fetch more code and define their global later. This type waits for the
+   * global itself.
+   */
+  qsl.registerType('wait-for-global', function (process) {
+    return new Promise(function (resolve, reject) {
+      var waited = 0;
+      (function poll() {
+        if (window[process.name]) {
+          if (process.onComplete) process.onComplete();
+          return resolve();
+        }
+        if ((waited += 50) > (process.timeout || 5000)) {
+          var error = new Error(process.name + ' never appeared');
+          if (process.onError) process.onError(error);
+          return reject(error);
+        }
+        setTimeout(poll, 50);
+      })();
+    });
+  });
+
+  /**
+   * ── Timings ────────────────────────────────────────────────────────────
+   * Plain event listeners. The same numbers could go to
+   * navigator.sendBeacon('/qsl-timings', JSON.stringify(rows)).
+   */
+  var t0 = performance.now();
+  var timings = {};
+  qsl.useEvents();
+  ['started', 'completed', 'error', 'skipped'].forEach(function (name) {
+    window.addEventListener('QSL:' + name, function (e) {
+      var id = e.detail.id.replace(/^qsl-/, '');
+      var entry = timings[id] || (timings[id] = { start: performance.now() - t0 });
+      entry.end = performance.now() - t0;
+      entry.result = name === 'skipped' ? 'skipped: ' + e.detail.reason : name;
+      entry.kind = name;
+      drawTimings();
+    });
+  });
+  function drawTimings() {
+    var end = Math.max.apply(null, Object.keys(timings).map(function (k) { return timings[k].end; }).concat([1]));
+    var html = '';
+    Object.keys(timings).forEach(function (id) {
+      var t = timings[id];
+      html += '<tr><td>' + id + '</td><td class="' + t.kind + '">' + t.result + '</td><td>' +
+        Math.round(t.end - t.start) + '</td><td><div class="bar"><i class="' + t.kind + '" style="left:' +
+        (t.start / end * 100) + '%;width:' + ((t.end - t.start) / end * 100) + '%"></i></div></td></tr>';
+    });
+    document.getElementById('timings').innerHTML = html;
+  }
+
+  /**
+   * ── Flow state after the run ───────────────────────────────────────────
+   */
+  qsl.autoReset = false;
+  window.addEventListener('QSL:all:completed', function () {
+    var html = '';
+    qsl.flowOptions.forEach(function (options, flowId) {
+      html += '<tr><td>' + flowId + '</td><td>' + options.status + '</td><td>' + (options.outcome || '') + '</td></tr>';
+    });
+    document.getElementById('flows').innerHTML = html;
+    document.getElementById('reset').disabled = false;
+  });
+  document.getElementById('reset').addEventListener('click', function () {
+    qsl.reset();
+    this.disabled = true;
+    document.getElementById('flows').innerHTML = '<tr><td colspan="3">reset: no flows left</td></tr>';
+  });
+
+  /**
+   * ── CMS snippets ───────────────────────────────────────────────────────
+   * Snippets pasted in by different people, added in whatever order the CMS
+   * renders them. Consent defaults must run before the tag manager; priority
+   * moves it to the front without anyone reordering the others.
+   */
+  qsl.setFlowOptions({ ordered: true }, 'cms-snippets');
+
+  qsl.add({ id: 'tag-manager', type: 'inline-script', code: 'window.dataLayer = window.dataLayer || [];' }, 'cms-snippets');
+  qsl.add({ id: 'ab-test-config', type: 'inline-script', code: "window.abConfig = { headline: 'B' };" }, 'cms-snippets');
+  qsl.add({
+    id: 'consent-defaults',
+    type: 'inline-script',
+    code: "window.dataLayer = window.dataLayer || []; window.dataLayer.push(['consent', 'default', { ad_storage: 'denied' }]);",
+    priority: 100
+  }, 'cms-snippets');
+
+  /**
+   * ── The map, held until the button ────────────────────────────────────
+   */
+  qsl.setFlowOptions({ paused: true }, 'map');
+  qsl.add({
+    id: 'map',
+    type: 'iframe',
+    title: 'Store location',
+    container: '#map',
+    srcdoc: '<body style="margin:0;display:grid;place-items:center;height:100vh;font:14px system-ui;background:#cfe3d4">' +
+            'Map of the store would render here</body>'
+  }, 'map');
+  document.getElementById('show-map').addEventListener('click', function () {
+    qsl.runFlow('map');
+    this.disabled = true;
+  });
+
+  /**
+   * ── Comments: the plugin's trigger and condition ───────────────────────
+   */
+  qsl.setFlowOptions({ trigger: 'scroll:60', condition: 'network:fast' }, 'comments');
+
+  /**
+   * Stand-in for a vendor loader that defines its global some time after it
+   * has itself finished loading.
+   */
+  qsl.add({
+    id: 'comments-loader',
+    type: 'inline-script',
+    code: "setTimeout(function () { window.AcmeComments = { mount: function (el) { el.textContent = '3 comments — rendered by AcmeComments'; } }; }, 400);"
+  }, 'comments');
+
+  qsl.add({
+    id: 'comments-ready',
+    type: 'wait-for-global',
+    name: 'AcmeComments',
+    timeout: 3000,
+    depends: ['comments-loader'],
+    onComplete: function () { window.AcmeComments.mount(document.getElementById('comments')); }
+  }, 'comments');
+
+  /**
+   * ── Misconfigured on purpose ───────────────────────────────────────────
+   */
+
+  /**
+   * A cycle: each waits for the other. QSL breaks it and both
+   * are skipped with reason 'circular'.
+   */
+  qsl.add({ id: 'widget-a', depends: ['widget-b'] }, 'misconfigured');
+  qsl.add({ id: 'widget-b', depends: ['widget-a'] }, 'misconfigured');
+
+  /**
+   * A typo in a dependency: logged as not found, and the process runs
+   * anyway rather than waiting for something that will never exist.
+   */
+  qsl.add({ id: 'typo', depends: ['analytcs'] }, 'misconfigured');
+
+  /**
+   * A type nobody registered: settles as failed.
+   */
+  qsl.add({ id: 'no-such-type', type: 'carousel' }, 'misconfigured');
+
+  qsl.load();
+};
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl@0.2/dist/qsl.min.js?async=true"></script>
+</body>
+</html>

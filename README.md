@@ -96,8 +96,8 @@ after those events have passed.
 | Build | Entry | Size (gzip) | Contents |
 | --- | --- | --- | --- |
 | `dist/qsl.mjs` | `src/index.js` | — | ESM, nothing registered, nothing started |
-| `dist/qsl.min.js` | `src/presets/full.js` | ~8.5 kB | All types, conditions, triggers, and the logger, events, circ and dynamic plugins |
-| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~4.4 kB | The `script` type only |
+| `dist/qsl.min.js` | `src/presets/full.js` | ~9.3 kB | All types, conditions, triggers, and the logger and events plugins |
+| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~5.4 kB | The `script` type only |
 
 ## Quick start
 
@@ -147,10 +147,31 @@ is shorthand for the latter.
 fires, it waits.
 
 **Condition** — whether it should run at all. A failing condition skips it.
+A process checks its condition when it starts and again right before it runs,
+after its trigger and dependencies, so a long wait cannot run it in a context
+that no longer applies.
 
 **Dependency** — `depends` makes a process or flow wait for others to finish.
-Circular dependencies are detected by the `circ` plugin and broken rather than
-deadlocking; a dependency that does not exist is logged and ignored.
+Circular dependencies are broken rather than deadlocking: every member of a
+cycle is skipped with reason `'circular'`, and whatever depends on the cycle
+settles by the usual rules. A dependency that does not exist is logged and
+ignored.
+
+**Late adds** — a flow created while a run is in progress, by `add()` or by
+`setFlowOptions()`, is a late flow: it starts once the regular flows are done,
+follows its own options like any flow, and the run completes when it does. A
+process added with no flow gets a late flow of its own. A process added to a
+flow that has already started gets one too, carrying over that flow's
+`condition`, `strict`, `fireEvents` and `group`: a started flow runs from the
+list it had when it started.
+
+**Outcome** — every process settles exactly once: completed, failed or
+skipped. All three release whatever depends on it. By default a dependent then
+runs regardless; set `strict: true` and it is skipped instead when a
+dependency failed or was skipped, and so on down the chain. `strict` can be set
+on a process, on a flow, or for the whole instance, and the nearest setting
+wins. For a flow, `strict` means: skip if a flow it depends on was skipped or
+had a failure inside it.
 
 ## API
 
@@ -192,9 +213,10 @@ Sets options on a flow, creating it if needed. Merges with previous options.
 | `priority` | `0` | Higher runs earlier; flows with a trigger always go last |
 | `trigger` | `null` | See [Triggers](#triggers) |
 | `condition` | `null` | See [Conditions](#conditions) |
-| `depends` | `[]` | Flow ids to wait for. Setting this pauses the flow |
+| `depends` | `[]` | Flow ids to wait for |
 | `group` | `null` | Group name for `pauseGroup` / `runGroup` |
-| `paused` | `false` | Hold the flow until `runFlow()` |
+| `paused` | `false` | Hold the flow until `runFlow()` or `runGroup()` |
+| `strict` | — | Skip when a dependency failed or was skipped. Not set: inherits `qsl.strict` |
 | `preload` | `false` | Emit `<link rel=preload>` for scripts and styles |
 | `fireEvents` | `true` | Let the `events` plugin re-dispatch lifecycle events |
 
@@ -205,6 +227,10 @@ Sets options on a flow, creating it if needed. Merges with previous options.
   `registerTypes` accepts `[{ type, handler }]` or `{ type: handler }`.
 - `runFlow(flowId, withTrigger = false)` — start a paused flow.
 - `pauseGroup(name)` / `runGroup(name)` — act on every flow in a group.
+  `pauseGroup` pauses anything in the group that has not started yet,
+  including a flow already waiting for its trigger or its dependencies;
+  `runGroup` releases it, and a flow whose trigger fired during the pause
+  waits for that trigger afresh.
 - `setLogger(logger)` — supply an object with `log()` and `error()`.
 - `setOnAllComplete(fn)` — callback for the end of a run.
 - `useEvents()` — enable DOM lifecycle events.
@@ -213,11 +239,15 @@ Sets options on a flow, creating it if needed. Merges with previous options.
 - `destroy()` — clear everything, including types and plugins. `init()` must be
   called again afterwards.
 - `autoReset` — set to `false` to keep flow state after a run, for debugging.
+- `strict` — instance default for `strict` (see Outcome above). `false` unless
+  you set it.
 
 ## Types
 
 Every type is a `{ type, handler }` pair. Handlers receive the process config
-and return a promise.
+and return a promise: resolve when the resource is ready, reject when it
+failed. A rejection settles the process as failed. Calling `onComplete` and
+`onError` is the handler's job, as the built-in types do.
 
 | Type | Key fields |
 | --- | --- |
@@ -308,14 +338,11 @@ A plugin is a function that receives the instance and registers handlers on it.
 | Plugin | What it adds |
 | --- | --- |
 | `conditions` | The five condition handlers above |
-| `triggers` | The eight trigger handlers above |
+| `triggers` | The nine trigger handlers above |
 | `logger` | A console logger with readable message names |
 | `events` | Re-dispatches `DOMContentLoaded` and `load` per process, so late-loaded third-party scripts that listen for them still initialise |
-| `circ` | Detects circular dependencies and breaks them |
-| `dynamic` | Defers processes added after `load()` into their own flows |
-| `simple-events` | Re-dispatches `DOMContentLoaded` and `load` globally once everything completes |
 
-Every plugin above except `simple-events` is already registered in the full
+Every plugin above is already registered in the full
 browser bundle. The slim bundle registers none of them. With the ESM entry you
 register what you want yourself:
 
@@ -332,6 +359,27 @@ Call `useEvents()` to enable them. Each carries the process config as `detail`.
 `QSL:started`, `QSL:completed`, `QSL:error`, `QSL:skipped`,
 `QSL:all:completed`.
 
+Exactly one of `completed`, `error` or `skipped` fires per process. On
+`QSL:error`, `detail.error` holds what the handler rejected with — the
+element's `error` event for the built-in types. On `QSL:skipped`,
+`detail.reason` says why: `'condition'`, `'dependency'` (a `strict` process or
+flow whose dependency failed or was skipped) or `'circular'`.
+
+## Examples
+
+Runnable pages in [`examples/`](examples/). Open `index.html` in a browser; no
+build step or server needed.
+
+| Example | Shows |
+| --- | --- |
+| [analytics-stack](examples/analytics-stack/) | An SDK, its plugins, ordered setup calls and marketing that needs them; `strict` when the SDK is blocked, with a fallback beacon |
+| [product-page](examples/product-page/) | Each widget loaded at its own moment: visible, hover or timeout, media query, element appears, idle |
+| [audience-targeting](examples/audience-targeting/) | Every condition type, combined with arrays, `or` and `and`, on processes and on a flow |
+| [spa-navigation](examples/spa-navigation/) | A run per route change, conditions re-checked after a wait, late adds deferred to the running run |
+| [consent-groups](examples/consent-groups/) | Consent categories as groups, an immediate and a deferred flow in each, and withdrawing consent |
+| [legacy-domcontentloaded](examples/legacy-domcontentloaded/) | Late-loaded vendor scripts that listen for `DOMContentLoaded` or `load`, with and without QSL |
+| [extending](examples/extending/) | Custom types, a plugin with its own trigger and condition, a logger, timings, `runFlow`, `priority`, `autoReset` |
+
 ## Security
 
 **QSL treats its configuration as trusted, privileged input.** The
@@ -346,8 +394,9 @@ Content Security Policy, and how to report a vulnerability.
 
 ```sh
 npm install
-npm test          # vitest + happy-dom
-npm run build     # three bundles into dist/
+npm test                # vitest + happy-dom
+npm run test:coverage   # the same, with the coverage floors CI enforces
+npm run build           # three bundles into dist/
 ```
 
 `npm run check:version` guards against `VERSION` in `src/core.js` drifting away

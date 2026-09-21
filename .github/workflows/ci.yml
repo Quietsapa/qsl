@@ -35,8 +35,8 @@ jobs:
       - name: Check version parity
         run: npm run check:version
 
-      - name: Run tests
-        run: npm test
+      - name: Run tests with coverage
+        run: npm run test:coverage
 
       - name: Build bundles
         run: npm run build

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QSL example — consent groups</title>
+
+<!--
+  THE PROBLEM
+
+  A cookie banner has three categories. Each category owns a handful of
+  third-party scripts, and nothing may load before the visitor agrees to that
+  category. So far this is just a flag check.
+
+  What makes it awkward is that within one category the scripts do not all
+  deserve the same treatment. Consent for "marketing" means the pixel should
+  fire right away — it is the whole point of the consent. But the chat widget
+  in the same category is 300 kB that the visitor may never open, so it should
+  wait until they actually do something on the page.
+
+  Hand-rolled, this turns into a tangle of booleans: consent flags, "has the
+  user interacted yet" flags, and a queue of callbacks that have to re-check
+  both every time either changes.
+
+  THE SHAPE HERE
+
+  Two flows per category, both in the same group:
+
+    marketing-immediate   paused until consent
+    marketing-deferred    paused until consent, then waits for interaction
+
+  runGroup('marketing') releases both. The immediate flow runs at once; the
+  deferred one re-pauses itself on its trigger and waits. No flags, and the
+  two conditions never have to know about each other.
+
+  Consent can also be withdrawn. After accepting, the bar at the bottom
+  offers it per category: pauseGroup() holds whatever in that group has not
+  started yet, including a deferred flow already waiting for its trigger.
+  What has already run stays on the page — no library can unload a script —
+  so a real site reloads after a withdrawal.
+-->
+
+<style>
+  :root { color-scheme: light dark; --line: #d8d8dc; --muted: #6b6b76; --bg: #fff; --fg: #17171b; --card: #f6f6f8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --line: #33333b; --muted: #9a9aa6; --bg: #141418; --fg: #eeeef2; --card: #1d1d23; }
+  }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 160px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lede { color: var(--muted); margin: 0 0 28px; }
+  h2 { font-size: 15px; margin: 28px 0 10px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  #log { border: 1px solid var(--line); border-radius: 8px; padding: 0; margin: 0; list-style: none; min-height: 60px; overflow: hidden; }
+  #log li { display: flex; gap: 10px; align-items: baseline; padding: 7px 12px; border-top: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  #log li:first-child { border-top: 0; }
+  #log .t { color: var(--muted); min-width: 62px; }
+  #log .tag { min-width: 96px; font-weight: 600; }
+  .analytics { color: #2d7ff9; } .marketing { color: #c2410c; } .functional { color: #0a7d55; } .essential { color: var(--muted); }
+  #banner { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 16px; }
+  #banner .inner, #withdraw .inner { max-width: 860px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; }
+  #withdraw { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; font-size: 14px; }
+  #withdraw[hidden] { display: none; }
+  label { display: inline-flex; gap: 7px; align-items: center; font-size: 14px; }
+  button { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .filler { height: 420px; display: grid; place-items: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; margin-top: 22px; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Consent groups, with deferred scripts inside each group</h1>
+  <p class="lede">Accept a category and watch what runs immediately and what keeps waiting.</p>
+
+  <h2>What ran</h2>
+  <p class="hint">
+    Essential scripts run on load. Everything else waits for consent — and the
+    deferred half of each category waits for consent <em>and</em> your first
+    click, scroll or keypress.
+  </p>
+  <ul id="log"></ul>
+
+  <div class="filler">scroll, click or press a key to trigger the deferred scripts</div>
+</main>
+
+<div id="withdraw" data-consent-ui hidden>
+  <div class="inner"><span>Withdraw consent:</span><span id="withdraw-buttons"></span></div>
+</div>
+
+<div id="banner" data-consent-ui>
+  <div class="inner">
+    <label><input type="checkbox" id="c-analytics" checked /> Analytics</label>
+    <label><input type="checkbox" id="c-marketing" /> Marketing</label>
+    <label><input type="checkbox" id="c-functional" /> Functional</label>
+    <button id="accept-selected">Accept selected</button>
+    <button id="accept-all" class="primary">Accept all</button>
+  </div>
+</div>
+
+<script>
+/**
+ * QSL is loaded with `async` so it never blocks the parser. Because of that,
+ * window.__QSL__ does not exist yet when this inline script runs — the tag
+ * below is still downloading. QSL calls window.QSLReady() once it is ready,
+ * which is why all the setup lives in here.
+ *
+ * Local development against a checkout: point the tag below at
+ * ../../dist/qsl.min.js?async=true after `npm run build`.
+ */
+window.QSLReady = function () {
+  var qsl = window.__QSL__;
+  var started = Date.now();
+
+  /**
+   * Demo plumbing: writes a line into the table on the page. In a real
+   * integration nothing like this exists.
+   */
+  function log(category, message) {
+    var li = document.createElement('li');
+    li.innerHTML =
+      '<span class="t">+' + String(Date.now() - started).padStart(4, '0') + 'ms</span>' +
+      '<span class="tag ' + category + '">' + category + '</span>' +
+      '<span>' + message + '</span>';
+    document.getElementById('log').appendChild(li);
+  }
+
+  /**
+   * The built-in 'interaction' trigger is the wrong signal here. It counts
+   * any pointer movement or click, and the consent click is itself one: it is
+   * still propagating when runGroup() arms the trigger, so the deferred
+   * scripts would load at once. Moving the pointer to "withdraw" would fire
+   * it too, before the withdrawal could hold anything.
+   *
+   * What we mean is "the visitor engaged with the page": a click, key, wheel
+   * or touch anywhere except the consent UI. Any function is a valid trigger
+   * — it just calls back when it is ready.
+   */
+  var engagement = ['click', 'keydown', 'wheel', 'touchstart'];
+  function engagedWithPage(cb) {
+    function handler(e) {
+      if (e.target.closest && e.target.closest('[data-consent-ui]')) return;
+      engagement.forEach(function (type) { window.removeEventListener(type, handler, true); });
+      cb();
+    }
+    engagement.forEach(function (type) { window.addEventListener(type, handler, { capture: true, passive: true }); });
+  }
+
+  /**
+   * Two flows per category, sharing one group. runGroup() releases both;
+   * only the deferred one carries a trigger.
+   */
+  qsl.setFlowOptions({ group: 'analytics', paused: true }, 'analytics-immediate');
+  qsl.setFlowOptions({ group: 'analytics', paused: true, trigger: engagedWithPage }, 'analytics-deferred');
+
+  qsl.setFlowOptions({ group: 'marketing', paused: true }, 'marketing-immediate');
+  qsl.setFlowOptions({ group: 'marketing', paused: true, trigger: engagedWithPage }, 'marketing-deferred');
+
+  qsl.setFlowOptions({ group: 'functional', paused: true }, 'functional-immediate');
+  qsl.setFlowOptions({ group: 'functional', paused: true, trigger: engagedWithPage }, 'functional-deferred');
+
+  /**
+   * Essential: no consent needed, no group, runs on load.
+   *
+   * Every process below uses the built-in `console` type so the page works
+   * offline. A real integration replaces each one with
+   * { type: 'script', src: 'https://vendor.example/tag.js' } and drops the
+   * onComplete handler.
+   */
+  qsl.add({
+    id: 'session',
+    type: 'console',
+    onComplete: function () { log('essential', 'session + CSRF token'); }
+  }, 'essential');
+
+  qsl.add({
+    id: 'errors',
+    type: 'console',
+    onComplete: function () { log('essential', 'error reporting'); }
+  }, 'essential');
+
+  /**
+   * Runs the moment consent is given — measuring the visit is the point.
+   */
+  qsl.add({
+    id: 'analytics-pageview',
+    type: 'console',
+    onComplete: function () { log('analytics', 'page view sent'); }
+  }, 'analytics-immediate');
+
+  qsl.add({
+    id: 'conversion-pixel',
+    type: 'console',
+    onComplete: function () { log('marketing', 'conversion pixel fired'); }
+  }, 'marketing-immediate');
+
+  qsl.add({
+    id: 'preferences',
+    type: 'console',
+    onComplete: function () { log('functional', 'saved preferences applied'); }
+  }, 'functional-immediate');
+
+  /**
+   * Consented, but heavy and only worth loading once the visitor engages.
+   * `delay` here stands in for how long a real tag takes to boot.
+   */
+  qsl.add({
+    id: 'session-recording',
+    type: 'console',
+    delay: 150,
+    onComplete: function () { log('analytics', 'session recording started (heavy)'); }
+  }, 'analytics-deferred');
+
+  qsl.add({
+    id: 'remarketing',
+    type: 'console',
+    delay: 120,
+    onComplete: function () { log('marketing', 'remarketing audience tag'); }
+  }, 'marketing-deferred');
+
+  qsl.add({
+    id: 'chat-widget',
+    type: 'console',
+    delay: 200,
+    onComplete: function () { log('functional', 'chat widget loaded (300 kB)'); }
+  }, 'functional-deferred');
+
+  qsl.load();
+
+  function accept(categories) {
+    categories.forEach(function (category) {
+      log(category, 'consent granted');
+      qsl.runGroup(category);
+    });
+    document.getElementById('banner').style.display = 'none';
+
+    /**
+     * Demo plumbing: one withdraw button per accepted category.
+     */
+    var buttons = document.getElementById('withdraw-buttons');
+    categories.forEach(function (category) {
+      var button = document.createElement('button');
+      button.textContent = category;
+      button.style.marginRight = '8px';
+      button.addEventListener('click', function () {
+        withdraw(category);
+        button.disabled = true;
+      });
+      buttons.appendChild(button);
+    });
+    document.getElementById('withdraw').hidden = categories.length === 0;
+  }
+
+  /**
+   * Holds every flow in the group that has not started yet — including the
+   * deferred one, if it is still waiting for an interaction.
+   */
+  function withdraw(category) {
+    qsl.pauseGroup(category);
+    log(category, 'consent withdrawn — anything not loaded yet stays held');
+  }
+
+  document.getElementById('accept-all').addEventListener('click', function () {
+    accept(['analytics', 'marketing', 'functional']);
+  });
+
+  document.getElementById('accept-selected').addEventListener('click', function () {
+    accept(['analytics', 'marketing', 'functional'].filter(function (category) {
+      return document.getElementById('c-' + category).checked;
+    }));
+  });
+};
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl@0.2/dist/qsl.min.js?async=true"></script>
+</body>
+</html>

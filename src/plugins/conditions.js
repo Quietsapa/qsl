@@ -67,7 +67,10 @@ export function timezoneCondition(QSL) {
                 case 'contains':
                     return !tz.includes(v);
                 case 'offset':
-                    return o !== parseInt(v);
+                    /**
+                     * parseFloat: several zones are not whole hours, e.g. 5.5
+                     */
+                    return o !== parseFloat(v);
                 default:
                     return true;
             }
@@ -111,8 +114,11 @@ export function urlCondition(QSL) {
                 if (se) {
                     const q = new URLSearchParams(se);
                     if (v.includes('=')) {
-                        const [key, val] = v.split('=');
-                        return q.get(key) !== val;
+                        /**
+                         * Split at the first '=' only: the value may contain more
+                         */
+                        const eq = v.indexOf('=');
+                        return q.get(v.slice(0, eq)) !== v.slice(eq + 1);
                     } else {
                         return !q.has(v);
                     }
@@ -192,8 +198,13 @@ export function userAgentCondition(QSL) {
                 
             case 'device':
                 // Detect device type
-                const isM = /mobile|android|iphone|ipod|blackberry|iemobile|opera mini/i.test(ua);
-                const isT = /tablet|ipad|playbook|silk/i.test(ua) || (isM && /android/i.test(ua) && !/mobile/i.test(ua));
+                /**
+                 * Tablets first: an iPad sends "Mobile/..." and an Android
+                 * tablet sends "Android" without "Mobile", and neither is a
+                 * phone.
+                 */
+                const isT = /tablet|ipad|playbook|silk/i.test(ua) || (/android/i.test(ua) && !/mobile/i.test(ua));
+                const isM = !isT && /mobile|android|iphone|ipod|blackberry|iemobile|opera mini/i.test(ua);
                 const isD = !isM && !isT;
                 
                 switch (vLower) {
@@ -209,7 +220,7 @@ export function userAgentCondition(QSL) {
                 // Detect operating system
                 const oMap = {
                     'windows': /win/i.test(ua),
-                    'mac': /mac/i.test(ua),
+                    'mac': /macintosh|mac os x/i.test(ua) && !/iphone|ipad|ipod/i.test(ua),
                     'ios': /iphone|ipad|ipod/i.test(ua),
                     'android': /android/i.test(ua),
                     'linux': /linux/i.test(ua) && !/android/i.test(ua),

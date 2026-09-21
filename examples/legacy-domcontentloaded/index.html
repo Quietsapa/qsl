@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QSL example — scripts that wait for DOMContentLoaded or load</title>
+
+<!--
+  THE PROBLEM
+
+  You defer a third-party script to make the page faster. It stops working.
+  No error, no warning — the widget simply never appears.
+
+  The reason is that a great many vendor scripts are written like this:
+
+    document.addEventListener('DOMContentLoaded', function () { init(); });
+
+  or, one event later:
+
+    window.addEventListener('load', function () { measure(); });
+
+  Both are fine when the tag sits in the markup and runs while the document is
+  still parsing. Both are fatal the moment the script loads afterwards: the
+  listener is registered against an event that has already happened and will
+  never happen again, so init() is never called.
+
+  This is the single most common reason "lazy loading our tags broke them",
+  and it is why teams give up and move everything back into the <head>.
+
+  THE SHAPE HERE
+
+  The `events` plugin watches for exactly this. When a process registers a
+  DOMContentLoaded or load listener after the real event has passed, it
+  attributes that listener to the process that registered it and dispatches
+  the event for that process alone. The vendor script is not modified, and
+  other scripts on the page are not disturbed.
+
+  Four scripts below all load late — long after both events have fired:
+
+    1. inline code, through QSL          DOMContentLoaded
+    2. an external file, through QSL     DOMContentLoaded
+    3. an external file, through QSL     window load
+    4. an external file, injected by hand, with no QSL involved
+
+  The first three run. The fourth does not, and says nothing about it.
+-->
+
+<style>
+  :root { color-scheme: light dark; --line:#d8d8dc; --muted:#6b6b76; --bg:#fff; --fg:#17171b; --ok:#0a7d55; --bad:#b91c1c; --card:#f6f6f8; }
+  @media (prefers-color-scheme: dark){ :root{ --line:#33333b; --muted:#9a9aa6; --bg:#141418; --fg:#eeeef2; --ok:#34d399; --bad:#f87171; --card:#1d1d23; } }
+  *{box-sizing:border-box}
+  body{font:15px/1.55 ui-sans-serif,system-ui,-apple-system,sans-serif;margin:0;background:var(--bg);color:var(--fg)}
+  main{max-width:820px;margin:0 auto;padding:32px 16px 80px}
+  h1{font-size:22px;margin:0 0 4px}
+  p.lede{color:var(--muted);margin:0 0 24px}
+  h2{font-size:15px;margin:30px 0 10px}
+  .hint{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .cards{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .card{border:1px solid var(--line);border-radius:8px;padding:14px;background:var(--card)}
+  .card h3{margin:0 0 2px;font-size:14px}
+  .card .who{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--muted);margin:0 0 8px}
+  .card p{margin:0;font-size:13px;color:var(--muted)}
+  .state{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;margin-top:10px}
+  .ok{color:var(--ok)} .bad{color:var(--bad)}
+  ul.log{border:1px solid var(--line);border-radius:8px;padding:0;margin:0;list-style:none;overflow:hidden}
+  ul.log li{padding:7px 12px;border-top:1px solid var(--line);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+  ul.log li:first-child{border-top:0}
+  .t{color:var(--muted);margin-right:10px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:var(--line);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Scripts that wait for DOMContentLoaded or load</h1>
+  <p class="lede">Every script here loads after both events have already fired. Three of them still work.</p>
+
+  <div class="cards">
+    <div class="card">
+      <h3>Inline code, via QSL</h3>
+      <p class="who">DOMContentLoaded</p>
+      <p>Registered from an <code>inline-script</code> process.</p>
+      <div class="state" id="state-dcl-inline">waiting…</div>
+    </div>
+    <div class="card">
+      <h3>External file, via QSL</h3>
+      <p class="who">DOMContentLoaded · vendor-dcl.js</p>
+      <p>The realistic case — a vendor tag you cannot edit.</p>
+      <div class="state" id="state-dcl-external">waiting…</div>
+    </div>
+    <div class="card">
+      <h3>External file, via QSL</h3>
+      <p class="who">window load · vendor-load.js</p>
+      <p>Tags that wait for images and stylesheets too.</p>
+      <div class="state" id="state-load-external">waiting…</div>
+    </div>
+    <div class="card">
+      <h3>External file, by hand</h3>
+      <p class="who">DOMContentLoaded · vendor-unmanaged.js</p>
+      <p>Identical code, injected without QSL. The control group.</p>
+      <div class="state" id="state-unmanaged">waiting…</div>
+    </div>
+  </div>
+
+  <h2>What happened</h2>
+  <p class="hint">
+    Each line is written by the vendor's own callback, so a line appearing at
+    all means that callback ran.
+  </p>
+  <ul class="log" id="log"></ul>
+</main>
+
+<script>
+/**
+ * QSL is loaded with `async` so it never blocks the parser. Because of that,
+ * window.__QSL__ does not exist yet when this inline script runs — the tag
+ * below is still downloading. QSL calls window.QSLReady() once it is ready,
+ * which is why all the setup lives in here.
+ *
+ * Local development against a checkout: point the tag below at
+ * ../../dist/qsl.min.js?async=true after `npm run build`.
+ */
+window.QSLReady = function () {
+  var qsl = window.__QSL__;
+  var started = Date.now();
+
+  function log(message) {
+    var li = document.createElement('li');
+    li.innerHTML = '<span class="t">+' + String(Date.now() - started).padStart(4, '0') + 'ms</span>' + message;
+    document.getElementById('log').appendChild(li);
+  }
+
+  /**
+   * Every vendor stub calls this when its own callback finally runs.
+   */
+  window.vendorBooted = function (which) {
+    var el = document.getElementById('state-' + which);
+    el.textContent = 'callback ran — widget works';
+    el.className = 'state ok';
+    log('<strong>' + which + '</strong> — vendor callback ran');
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    log('DOMContentLoaded fired — any listener registered after this is too late');
+  });
+
+  window.addEventListener('load', function () {
+    log('load fired — same again for anything listening for it');
+  });
+
+  /**
+   * Everything runs on the window load event plus a delay, which puts it
+   * safely after both events for all four cases.
+   */
+  qsl.setFlowOptions({ trigger: 'load', delay: 60 }, 'vendors');
+
+  qsl.add({
+    id: 'vendor-inline',
+    type: 'inline-script',
+    code: "document.addEventListener('DOMContentLoaded', function () { window.vendorBooted('dcl-inline'); });"
+  }, 'vendors');
+
+  qsl.add({
+    id: 'vendor-dcl',
+    type: 'script',
+    src: './vendor-dcl.js'
+  }, 'vendors');
+
+  qsl.add({
+    id: 'vendor-load',
+    type: 'script',
+    src: './vendor-load.js'
+  }, 'vendors');
+
+  qsl.load();
+
+  /**
+   * The control group: the same pattern, injected the ordinary way. QSL never
+   * sees this script, so the plugin has nothing to attribute the listener to
+   * and it stays registered against an event that is not coming back.
+   */
+  window.addEventListener('load', function () {
+    setTimeout(function () {
+      var script = document.createElement('script');
+      script.src = './vendor-unmanaged.js';
+      document.head.appendChild(script);
+      log('unmanaged — script injected and its listener registered');
+
+      setTimeout(function () {
+        var el = document.getElementById('state-unmanaged');
+        if (el.textContent === 'waiting…') {
+          el.textContent = 'callback never ran — silently dead';
+          el.className = 'state bad';
+          log('<strong>unmanaged</strong> — still waiting for an event that already happened');
+        }
+      }, 800);
+    }, 60);
+  });
+};
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl@0.2/dist/qsl.min.js?async=true"></script>
+</body>
+</html>

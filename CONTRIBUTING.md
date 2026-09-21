@@ -31,7 +31,8 @@ For anything with security impact, do not open a public issue. Follow
 - Add a test. `tests/` uses Vitest with happy-dom; the existing files show the
   patterns, including how to get a fresh core instance and how to resolve a
   single trigger or condition handler without booting the whole runtime.
-- Run `npm test` and `npm run build` before pushing.
+- Run `npm run test:coverage` and `npm run build` before pushing. CI fails
+  when coverage drops below the floors in `vitest.config.js`.
 - Match the surrounding style: four spaces, single quotes, semicolons, JSDoc on
   anything exported. There is no linter; the `.editorconfig` covers the
   mechanical part.
