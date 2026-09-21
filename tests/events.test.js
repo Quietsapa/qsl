@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { freshCore } from './helpers.js';
 import events from '../src/plugins/events.js';
 import dynamic from '../src/plugins/dynamic.js';
@@ -185,4 +185,175 @@ describe('events plugin', () => {
 
         expect(hits).toEqual([]);
     });
+
+    describe('addEventListener patch lifecycle', () => {
+        const own = (target) => Object.prototype.hasOwnProperty.call(target, 'addEventListener');
+
+        /* The prototype that actually supplies document.addEventListener. In
+           a browser that is EventTarget.prototype; happy-dom has its own
+           chain, so look it up rather than assume. */
+        const owner = (target) => {
+            let p = target;
+            while (p && !own(p)) p = Object.getPrototypeOf(p);
+            return p;
+        };
+
+        /* A plugin that leaked in an earlier test would leave an own property
+           on document and mask the check below. document never has one
+           natively, so start each test from the native state. */
+        beforeEach(() => {
+            if (own(document)) delete document.addEventListener;
+        });
+
+        it('restores the exact own-property state of document and window', async () => {
+            /* document normally inherits the method; window may or may not
+               (happy-dom defines it on the instance). Either way, the state
+               after a run must match the state before it. */
+            const docBefore = own(document);
+            expect(docBefore).toBe(false);
+            const winBefore = own(window);
+            const winMethod = window.addEventListener;
+
+            const core = await freshCore();
+            core.use(events);
+            core.LIFECYCLE.DOMREADY = true;
+            core.registerType('noop', () => Promise.resolve());
+
+            core.add({ id: 'plain', type: 'noop' });
+            await core.load();
+
+            expect(own(document)).toBe(docBefore);
+            expect(own(window)).toBe(winBefore);
+            expect(window.addEventListener).toBe(winMethod);
+        });
+
+        it('lets a prototype patch installed after the run reach document', async () => {
+            /* Resolve the prototype before the run: afterwards, a leaked own
+               property would make document itself look like the owner. */
+            const proto = owner(Object.getPrototypeOf(document));
+            const core = await freshCore();
+            core.use(events);
+            core.LIFECYCLE.DOMREADY = true;
+            core.registerType('noop', () => Promise.resolve());
+
+            core.add({ id: 'plain', type: 'noop' });
+            await core.load();
+
+            /* What an APM or RUM SDK loaded later does. */
+            const native = proto.addEventListener;
+            const seen = [];
+            proto.addEventListener = function (type, ...rest) {
+                seen.push(type);
+                return native.call(this, type, ...rest);
+            };
+            try {
+                document.addEventListener('qsl-probe', () => {});
+            } finally {
+                proto.addEventListener = native;
+            }
+
+            expect(seen).toEqual(['qsl-probe']);
+        });
+
+        it('does not remove a wrapper another script stacked on top during the run', async () => {
+            const core = await freshCore();
+            core.use(events);
+            core.LIFECYCLE.DOMREADY = true;
+
+            const hadOwn = own(document);
+            let apmCalls = 0;
+            let apmWrapper = null;
+
+            core.registerType('apm', () => {
+                const underneath = document.addEventListener;
+                apmWrapper = function (...args) {
+                    apmCalls++;
+                    return underneath.apply(this, args);
+                };
+                document.addEventListener = apmWrapper;
+                return Promise.resolve();
+            });
+
+            try {
+                core.add({ id: 'apm', type: 'apm' });
+                await core.load();
+
+                expect(document.addEventListener).toBe(apmWrapper);
+
+                /* Outside a run the plugin passes through: the real event
+                   name reaches the native method untouched. */
+                const hits = [];
+                document.addEventListener('DOMContentLoaded', () => hits.push('outside'));
+                document.dispatchEvent(new Event('DOMContentLoaded'));
+                expect(hits).toEqual(['outside']);
+                expect(apmCalls).toBe(1);
+            } finally {
+                if (hadOwn) document.addEventListener = owner(Object.getPrototypeOf(document)).addEventListener;
+                else delete document.addEventListener;
+            }
+        });
+
+        it('reuses its stacked wrapper and intercepts again in the next run', async () => {
+            const core = await freshCore();
+            core.use(events);
+            core.LIFECYCLE.DOMREADY = true;
+
+            const hadOwn = own(document);
+            let apmWrapper = null;
+            const hits = [];
+
+            core.registerType('apm', () => {
+                const underneath = document.addEventListener;
+                apmWrapper = function (...args) {
+                    return underneath.apply(this, args);
+                };
+                document.addEventListener = apmWrapper;
+                return Promise.resolve();
+            });
+            registerVendorType(core, 'DOMContentLoaded', hits, 1);
+
+            try {
+                core.add({ id: 'apm', type: 'apm' });
+                await core.load();
+
+                core.add({ id: 'vendor', type: 'vendor' });
+                await core.load();
+
+                expect(hits).toEqual(['listener-0']);
+                expect(document.addEventListener).toBe(apmWrapper);
+            } finally {
+                if (hadOwn) document.addEventListener = owner(Object.getPrototypeOf(document)).addEventListener;
+                else delete document.addEventListener;
+            }
+        });
+
+        it('calls the original with the receiver the caller used', async () => {
+            const core = await freshCore();
+            core.use(events);
+            core.LIFECYCLE.DOMREADY = true;
+
+            const receivers = [];
+            const proto = owner(document);
+            const native = proto.addEventListener;
+            proto.addEventListener = function (...args) {
+                receivers.push(this);
+                return native.apply(this, args);
+            };
+
+            const other = document.createElement('div');
+            try {
+                core.registerType('probe', () => {
+                    document.addEventListener.call(other, 'ping', () => {});
+                    return Promise.resolve();
+                });
+                core.add({ id: 'probe', type: 'probe' });
+                await core.load();
+            } finally {
+                proto.addEventListener = native;
+            }
+
+            expect(receivers).toContain(other);
+        });
+    });
 });
+

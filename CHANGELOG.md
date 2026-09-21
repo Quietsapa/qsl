@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-21
+
+### Fixed
+
+- **The `events` plugin left a permanent mark on `document` and `window`.** On
+  reset it assigned the saved `addEventListener` back to each object. The method
+  normally comes from `EventTarget.prototype`, so that assignment created an own
+  property that shadowed the prototype for the rest of the page's life. An APM,
+  RUM or session-replay SDK that instruments the prototype after QSL had run
+  never saw listeners added to `document` or `window`. The plugin now restores
+  the exact previous state: it deletes the property when there was none before.
+- **Reset removed other scripts' wrappers.** If a script loaded during a run
+  wrapped `addEventListener` on top of QSL's wrapper, reset overwrote it with
+  the saved original and that script's instrumentation silently stopped. QSL now
+  leaves a wrapper it does not own in place. Its own wrapper stays in the chain
+  underneath as a pass-through while no run is active, and resumes intercepting
+  when the next run starts.
+- **The wrapper ignored the receiver.** It was an arrow function that called
+  the saved method bound to `document` or `window` regardless of what the caller
+  passed as `this`, which broke `addEventListener.call(otherTarget, ...)` during
+  a run. The original is now called with the caller's receiver.
+
+### Added
+
+- Tests covering the patch lifecycle: own-property state after a run, a
+  prototype patch installed afterwards, a wrapper stacked on top during a run,
+  interception resuming in the next run, and the receiver.
+
 ## [0.1.4] - 2026-09-20
 
 ### Fixed
@@ -160,7 +188,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Quietsapa/qsl/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Quietsapa/qsl/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Quietsapa/qsl/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Quietsapa/qsl/compare/v0.1.1...v0.1.2

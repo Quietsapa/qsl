@@ -6,9 +6,12 @@ export default function(QSL) {
     const customEvents = new Map();
     const processElementMap = new WeakMap();
     let processCounter = 0;
-    let documentListener = null;
-    let windowListener = null;
-    let isIntercepting = false;
+
+    /* Whether our lifecycle logic runs. The wrappers can outlive a run (see
+       createPatch), so this flag — not their presence — is what switches the
+       interception on and off. */
+    let active = false;
+    let lifecycleIterator = null;
 
     /**
      * Normalize script URL for comparison (remove protocol, domain, query params, hash).
@@ -45,14 +48,80 @@ export default function(QSL) {
     };
 
     /**
+     * Wrap addEventListener on one target so it can be undone without leaving
+     * a trace on the page.
+     *
+     * Two things matter here, because the scripts QSL loads include APM, RUM
+     * and session-replay SDKs that instrument addEventListener themselves:
+     *
+     *   - Restore the exact previous state. The method normally comes from
+     *     EventTarget.prototype; assigning it back would leave an own property
+     *     on the target that shadows the prototype forever, and any SDK that
+     *     instruments the prototype later would never see this target.
+     *   - Never clobber someone else. If another script wrapped on top of us
+     *     during the run, we leave their wrapper where it is. Ours stays in the
+     *     chain but becomes a plain pass-through while `active` is false, and
+     *     is reused if a later run switches it back on.
+     *
+     * @param {EventTarget} target - document or window
+     * @param {Function} wrap - (original) => wrapper
+     */
+    const createPatch = (target, wrap) => {
+        const patch = { original: null, wrapper: null, hadOwn: false };
+
+        patch.apply = () => {
+            /* Still installed from an earlier run, on top or stacked under
+               someone else: flipping `active` is all it takes. */
+            if (patch.wrapper) return;
+            patch.hadOwn = Object.prototype.hasOwnProperty.call(target, 'addEventListener');
+            patch.original = target.addEventListener;
+            patch.wrapper = wrap(patch.original);
+            target.addEventListener = patch.wrapper;
+        };
+
+        patch.remove = () => {
+            if (!patch.wrapper || target.addEventListener !== patch.wrapper) return;
+            if (patch.hadOwn) {
+                target.addEventListener = patch.original;
+            } else {
+                delete target.addEventListener;
+            }
+            patch.wrapper = null;
+            patch.original = null;
+        };
+
+        return patch;
+    };
+
+    /* Regular functions, not arrows: the original is called with whatever
+       receiver the caller used, exactly as the native method would be. */
+    const documentPatch = createPatch(document, (original) => function (type, listener, opts) {
+        if (active && type === 'DOMContentLoaded' && QSL.LIFECYCLE.DOMREADY) {
+            /**
+             * Only rename here. The renamed event is dispatched once, when
+             * the process completes (see processCompleteActions below).
+             * Dispatching here as well would deliver it twice, and a vendor
+             * that registers two listeners would see every one of them fire
+             * once per registration on top of that.
+             */
+            type = lifecycleIterator(type, QSL.EVENTS.DOMREADY, true);
+        }
+        return original.call(this, type, listener, opts);
+    });
+
+    const windowPatch = createPatch(window, (original) => function (type, listener, opts) {
+        if (active && type === 'load' && QSL.LIFECYCLE.LOADED) {
+            /* Same as above: rename now, dispatch once on completion. */
+            type = lifecycleIterator(type, QSL.EVENTS.LOADED, true);
+        }
+        return original.call(this, type, listener, opts);
+    });
+
+    /**
      * Initialize event interception when QSL loads.
      */
     QSL.loadActions.add(function() {
-        if (isIntercepting) return;
-        
-        documentListener = document.addEventListener;
-        windowListener = window.addEventListener;
-        isIntercepting = true;
+        if (active) return;
 
         const iterator = (type, eventType, changeEventName) => {
             let currentScriptId = null;
@@ -157,27 +226,10 @@ export default function(QSL) {
             return type;
         };
 
-        document.addEventListener = (type, listener, opts) => {
-            if (type === 'DOMContentLoaded' && this.LIFECYCLE.DOMREADY) {
-                /**
-                 * Only rename here. The renamed event is dispatched once, when
-                 * the process completes (see processCompleteActions below).
-                 * Dispatching here as well would deliver it twice, and a vendor
-                 * that registers two listeners would see every one of them fire
-                 * once per registration on top of that.
-                 */
-                type = iterator.call(this, type, this.EVENTS.DOMREADY, true);
-            }
-            return documentListener.call(document, type, listener, opts);
-        };
-
-        window.addEventListener = (type, listener, opts) => {
-            if (type === 'load' && this.LIFECYCLE.LOADED) {
-                /* Same as above: rename now, dispatch once on completion. */
-                type = iterator.call(this, type, this.EVENTS.LOADED, true);
-            }
-            return windowListener.call(window, type, listener, opts);
-        };
+        lifecycleIterator = iterator;
+        documentPatch.apply();
+        windowPatch.apply();
+        active = true;
     });
 
     /**
@@ -226,11 +278,10 @@ export default function(QSL) {
      * Use resetActions instead of patching reset.
      */
     QSL.resetActions.add(function() {
-        if (isIntercepting && documentListener && windowListener) {
-            document.addEventListener = documentListener;
-            window.addEventListener = windowListener;
-            isIntercepting = false;
-        }
+        if (!active) return;
+        active = false;
+        documentPatch.remove();
+        windowPatch.remove();
     });
 
     /**
