@@ -284,8 +284,13 @@ describe('selector triggers', () => {
         ['visible:', visibleTrigger],
         ['appears:', appearsTrigger],
     ])('%s with an invalid selector fires at once rather than hanging', (prefix, handler) => {
+        /**
+         * A different broken selector each time: happy-dom caches a selector
+         * after its first parse and stops throwing for it, which a browser
+         * never does.
+         */
         let fired = false;
-        resolveTrigger(handler, prefix + '[[[')(() => { fired = true; });
+        resolveTrigger(handler, prefix + '[[[' + prefix.slice(0, -1))(() => { fired = true; });
         expect(fired).toBe(true);
     });
 

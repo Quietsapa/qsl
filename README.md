@@ -367,8 +367,9 @@ flow whose dependency failed or was skipped) or `'circular'`.
 
 ## Examples
 
-Runnable pages in [`examples/`](examples/). Open `index.html` in a browser; no
-build step or server needed.
+Runnable pages in [`examples/`](examples/), also live at
+**[quietsapa.github.io/qsl](https://quietsapa.github.io/qsl/)**. To run them
+locally, open any `index.html` in a browser; no build step or server needed.
 
 | Example | Shows |
 | --- | --- |
@@ -397,6 +398,8 @@ npm install
 npm test                # vitest + happy-dom
 npm run test:coverage   # the same, with the coverage floors CI enforces
 npm run build           # three bundles into dist/
+npm run check:size      # gzip budgets for the browser bundles
+npm run test:e2e        # every example in headless Chromium, against dist/
 ```
 
 `npm run check:version` guards against `VERSION` in `src/core.js` drifting away

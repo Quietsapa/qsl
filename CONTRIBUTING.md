@@ -12,9 +12,15 @@ npm install
 npm test
 ```
 
-Node 18 or newer. There are no runtime dependencies and there will not be any —
-this library ends up on other people's pages, and every dependency is something
-they have to audit.
+Node 22.12 or newer for development: the test and build tools need it, the
+library itself runs in any browser. There are no runtime dependencies and
+there will not be any — this library ends up on other people's pages, and
+every dependency is something they have to audit.
+
+`npm run test:e2e` drives the examples in headless Chromium. Run
+`npx playwright install chromium` once before the first time. Where
+Playwright has no Chromium build for your system (macOS 12, for instance),
+the script uses your installed Google Chrome instead.
 
 ## Reporting a bug
 

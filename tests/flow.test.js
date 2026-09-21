@@ -30,6 +30,23 @@ function registerMark(core, log) {
 
 const starts = (log) => log.filter((e) => e.event === 'start').map((e) => e.id);
 
+/**
+ * Run a load() on fake timers, so time-based options can be checked to the
+ * millisecond instead of against a margin a slow CI runner might exceed.
+ */
+async function loadOnFakeTimers(core, options) {
+    vi.useFakeTimers();
+    try {
+        const loading = core.load(options);
+        await vi.runAllTimersAsync();
+        await loading;
+    } finally {
+        vi.useRealTimers();
+    }
+}
+
+const at = (log, id, event = 'start') => log.find((e) => e.id === id && e.event === event).at;
+
 function listen(names) {
     const seen = [];
     const off = names.map((name) => {
@@ -50,62 +67,64 @@ describe('flow options', () => {
     it('delay holds the flow before its first process', async () => {
         const core = await freshCore();
         const log = [];
-        registerMark(core, log);
 
         core.setFlowOptions({ delay: 60 }, 'late');
         core.add({ id: 'a', type: 'mark', mark: 'a' }, 'late');
         core.add({ id: 'b', type: 'mark', mark: 'b' }, 'now');
-        await core.load();
+        vi.useFakeTimers();
+        registerMark(core, log);
+        await loadOnFakeTimers(core);
 
-        const a = log.find((e) => e.id === 'a' && e.event === 'start').at;
-        const b = log.find((e) => e.id === 'b' && e.event === 'start').at;
-        expect(a - b).toBeGreaterThanOrEqual(50);
+        expect(at(log, 'a') - at(log, 'b')).toBe(60);
     });
 
     it('between staggers the processes of an unordered flow', async () => {
         const core = await freshCore();
         const log = [];
-        registerMark(core, log);
 
         core.setFlowOptions({ between: 40 }, 'f');
-        core.add({ id: 'a', type: 'mark', mark: 'a' }, 'f');
+        core.add({ id: 'a', type: 'mark', mark: 'a', wait: 100 }, 'f');
         core.add({ id: 'b', type: 'mark', mark: 'b' }, 'f');
-        await core.load();
+        vi.useFakeTimers();
+        registerMark(core, log);
+        await loadOnFakeTimers(core);
 
-        const [a, b] = log.filter((e) => e.event === 'start').map((e) => e.at);
-        expect(b - a).toBeGreaterThanOrEqual(30);
+        /**
+         * Staggered starts, not sequential: b does not wait for a to end.
+         */
+        expect(at(log, 'b') - at(log, 'a')).toBe(40);
+        expect(at(log, 'b')).toBeLessThan(at(log, 'a', 'end'));
     });
 
     it('between in an ordered flow waits after each process ends', async () => {
         const core = await freshCore();
         const log = [];
-        registerMark(core, log);
 
         core.setFlowOptions({ ordered: true, between: 40 }, 'f');
         core.add({ id: 'a', type: 'mark', mark: 'a', wait: 20 }, 'f');
         core.add({ id: 'b', type: 'mark', mark: 'b' }, 'f');
-        await core.load();
+        vi.useFakeTimers();
+        registerMark(core, log);
+        await loadOnFakeTimers(core);
 
-        const aEnd = log.find((e) => e.id === 'a' && e.event === 'end').at;
-        const bStart = log.find((e) => e.id === 'b' && e.event === 'start').at;
-        expect(bStart - aEnd).toBeGreaterThanOrEqual(30);
+        expect(at(log, 'b') - at(log, 'a', 'end')).toBe(40);
     });
 
     it('load({ between }) is the default, and a flow can override it with 0', async () => {
         const core = await freshCore();
         const log = [];
-        registerMark(core, log);
 
         core.add({ id: 'a', type: 'mark', mark: 'a' }, 'global');
         core.add({ id: 'b', type: 'mark', mark: 'b' }, 'global');
         core.setFlowOptions({ between: 0 }, 'own');
         core.add({ id: 'c', type: 'mark', mark: 'c' }, 'own');
         core.add({ id: 'd', type: 'mark', mark: 'd' }, 'own');
-        await core.load({ between: 40 });
+        vi.useFakeTimers();
+        registerMark(core, log);
+        await loadOnFakeTimers(core, { between: 40 });
 
-        const at = (id) => log.find((e) => e.id === id && e.event === 'start').at;
-        expect(at('b') - at('a')).toBeGreaterThanOrEqual(30);
-        expect(at('d') - at('c')).toBeLessThan(20);
+        expect(at(log, 'b') - at(log, 'a')).toBe(40);
+        expect(at(log, 'd') - at(log, 'c')).toBe(0);
     });
 
     it('priority orders flows, and flows with a trigger always start last', async () => {

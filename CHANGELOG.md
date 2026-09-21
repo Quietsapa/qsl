@@ -6,6 +6,39 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-21
+
+No change to the runtime: `src/` is the same as in 0.2.0. This release is
+about the examples and the tooling around them.
+
+### Added
+
+- **The examples are live** at
+  [quietsapa.github.io/qsl](https://quietsapa.github.io/qsl/), with a start
+  page that lists all seven. The README and `examples/README.md` link to it.
+  The start page also works opened from disk.
+- `npm run test:e2e` drives every example in headless Chromium against the
+  built bundle, and runs in CI. Where Playwright has no Chromium build for the
+  system (macOS 12, for instance) it uses the installed Google Chrome.
+- `npm run check:size` holds the browser bundles to gzip budgets — 10 kB for
+  the full bundle, 6 kB for the slim one — in CI and before publishing.
+
+### Changed
+
+- The `engines` field is gone from `package.json`. It asked for Node 18,
+  which described the development tools rather than the library — QSL runs in
+  the browser — and npm showed it to everyone installing the package.
+
+### Development
+
+- Test and build tooling upgraded to vitest 5, vite 8 and happy-dom 20, which
+  clears every advisory `npm audit` reported. None of them reached users, as
+  QSL has no runtime dependencies, but they affected anyone running the dev
+  tools. Development now needs Node 22.12 or newer.
+- Tests for the stack-trace attribution in the `events` plugin, and the
+  time-based flow tests moved to fake timers, so they check exact values and
+  cannot flake on a slow CI runner.
+
 ## [0.2.0] - 2026-09-21
 
 Writing the examples exercised far more of QSL than the tests did, and most of
@@ -345,7 +378,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Quietsapa/qsl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Quietsapa/qsl/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Quietsapa/qsl/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Quietsapa/qsl/compare/v0.1.3...v0.1.4

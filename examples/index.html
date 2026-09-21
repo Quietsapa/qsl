@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QSL examples</title>
+<meta name="description" content="Runnable examples for QSL, a dependency-aware orchestration runtime for third-party scripts." />
+
+<style>
+  :root { color-scheme: light dark; --line:#d8d8dc; --muted:#6b6b76; --bg:#fff; --fg:#17171b; --card:#f6f6f8; --accent:#2d7ff9; }
+  @media (prefers-color-scheme: dark) { :root { --line:#33333b; --muted:#9a9aa6; --bg:#141418; --fg:#eeeef2; --card:#1d1d23; --accent:#60a5fa; } }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+  main { max-width: 900px; margin: 0 auto; padding: 40px 16px 80px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  p.lede { color: var(--muted); margin: 0 0 8px; max-width: 640px; }
+  p.links { margin: 0 0 28px; font-size: 14px; }
+  p.links a { color: var(--accent); text-decoration: none; margin-right: 16px; }
+  ul.examples { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  ul.examples a { display: block; height: 100%; padding: 16px 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: inherit; text-decoration: none; }
+  ul.examples a:hover, ul.examples a:focus-visible { border-color: var(--accent); }
+  ul.examples h2 { font-size: 15px; margin: 0 0 4px; }
+  ul.examples p { margin: 0 0 10px; font-size: 14px; color: var(--muted); }
+  ul.examples code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--muted); }
+  footer { margin-top: 32px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>QSL examples</h1>
+  <p class="lede">
+    Each page is one real problem with third-party scripts and the QSL
+    configuration that solves it. Open one, interact with it, then read its
+    source: every page starts with a comment explaining the problem.
+  </p>
+  <p class="links">
+    <a href="https://github.com/Quietsapa/qsl">GitHub</a>
+    <a href="https://github.com/Quietsapa/qsl/tree/main/examples">Source of these pages</a>
+    <a href="https://www.npmjs.com/package/@quietsapa/qsl">npm</a>
+  </p>
+
+  <ul class="examples">
+    <li><a href="analytics-stack/index.html">
+      <h2>An analytics SDK and everything that depends on it</h2>
+      <p>Block the SDK and watch the failure travel exactly as far as it should, while a fallback beacon records the visit.</p>
+      <code>depends · strict · ordered · between · preload · onError</code>
+    </a></li>
+    <li><a href="product-page/index.html">
+      <h2>A product page that loads each widget when it is needed</h2>
+      <p>Reviews on scroll, chat on hover, a desktop-only gallery, recommendations when the cart opens.</p>
+      <code>visible · hover · media · appears · idle · shadow · html</code>
+    </a></li>
+    <li><a href="audience-targeting/index.html">
+      <h2>One configuration, different visitors</h2>
+      <p>Ads, app banners, language, time zone, a debug flow: see what ran for you and why the rest was skipped.</p>
+      <code>url · lang · tz · ua · media · or / and</code>
+    </a></li>
+    <li><a href="spa-navigation/index.html">
+      <h2>Tags in a single-page app</h2>
+      <p>One run per route change, conditions re-checked after a wait, navigation in the middle of a run.</p>
+      <code>repeated load() · late adds · events plugin</code>
+    </a></li>
+    <li><a href="consent-groups/index.html">
+      <h2>Consent groups with deferred scripts</h2>
+      <p>Each cookie category has an immediate and a deferred half, and consent can be withdrawn.</p>
+      <code>group · paused · runGroup · pauseGroup</code>
+    </a></li>
+    <li><a href="legacy-domcontentloaded/index.html">
+      <h2>Scripts that wait for DOMContentLoaded</h2>
+      <p>Why deferring a vendor tag silently breaks it, and three late scripts that still work.</p>
+      <code>events plugin · DOMContentLoaded · load</code>
+    </a></li>
+    <li><a href="extending/index.html">
+      <h2>Extending QSL, and seeing what it did</h2>
+      <p>Custom types, a plugin with its own trigger and condition, a logger and per-process timings.</p>
+      <code>registerType · use · setLogger · useEvents · runFlow</code>
+    </a></li>
+  </ul>
+
+  <footer>Apache-2.0. The pages load QSL from jsDelivr; nothing is tracked.</footer>
+</main>
+</body>
+</html>

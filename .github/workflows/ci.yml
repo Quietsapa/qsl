@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["18", "20", "22"]
+        node: ["22", "24"]
 
     steps:
       - name: Checkout
@@ -41,5 +41,13 @@ jobs:
       - name: Build bundles
         run: npm run build
 
-      - name: Report bundle sizes
-        run: ls -lh dist/*.js dist/*.mjs
+      - name: Check bundle sizes
+        run: npm run check:size
+
+      - name: Install Chromium
+        if: matrix.node == '22'
+        run: npx playwright install --with-deps chromium
+
+      - name: Run examples in the browser
+        if: matrix.node == '22'
+        run: npm run test:e2e

@@ -1,5 +1,7 @@
 # Examples
 
+Live at **[quietsapa.github.io/qsl](https://quietsapa.github.io/qsl/)**.
+
 Each folder is one self-contained page. Open `index.html` in a browser — there
 is no build step and no server needed. They load QSL from a CDN, so they work
 from a file you email to someone.

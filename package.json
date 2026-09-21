@@ -1,6 +1,6 @@
 {
   "name": "@quietsapa/qsl",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Dependency-aware orchestration runtime for third-party scripts, styles, pixels and custom elements in the browser.",
   "type": "module",
   "license": "Apache-2.0",
@@ -36,18 +36,18 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "node scripts/e2e.mjs",
     "check:version": "node scripts/check-version.js",
-    "prepublishOnly": "npm run check:version && npm test && npm run build"
+    "check:size": "node scripts/check-size.js",
+    "prepublishOnly": "npm run check:version && npm test && npm run build && npm run check:size"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^2.1.9",
-    "happy-dom": "^15.11.0",
-    "terser": "^5.36.0",
-    "vite": "^5.4.0",
-    "vitest": "^2.1.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "@vitest/coverage-v8": "^5.0.1",
+    "happy-dom": "^20.14.5",
+    "playwright": "^1.63.0",
+    "terser": "^5.51.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
   },
   "keywords": [
     "script-loader",

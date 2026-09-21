@@ -450,5 +450,42 @@ describe('events plugin', () => {
 
         expect(hits).toEqual(['by-stack']);
     });
+
+    /**
+     * The stack-trace fallback compares the file a listener was registered
+     * from with the `src` of each script process. It is a heuristic over URLs
+     * and paths, so it gets a table.
+     */
+    const thisFile = new URL(import.meta.url).pathname;
+
+    it.each([
+        ['a URL with query and hash', 'https://cdn.example/vendor/events.test.js?v=2#top', 'script', true],
+        ['a relative path with a hash', 'vendor/events.test.js#frag', 'script', true],
+        ['the bare file name', 'events.test.js', 'script', true],
+        ['the exact path of the file', thisFile, 'script', true],
+        ['a different file', 'https://cdn.example/vendor/other.js', 'script', false],
+        ['a src that is not a valid URL', 'http://[broken/events.test.jsx', 'script', false],
+        ['the right file on a type other than script', 'events.test.js', 'not-a-script', false],
+    ])('by stack: %s → attributed: %s', async (_, src, type, attributed) => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const hits = [];
+
+        core.registerType(type, () => {
+            document.addEventListener('DOMContentLoaded', () => hits.push('hit'));
+            return Promise.resolve();
+        });
+
+        core.add({ id: 'vendor', type, src });
+        await core.load();
+
+        /**
+         * An attributed listener runs on completion. One that is not stays
+         * bound to the real event; fire that to clean up after the test.
+         */
+        expect(hits).toEqual(attributed ? ['hit'] : []);
+        if (!attributed) document.dispatchEvent(new Event('DOMContentLoaded'));
+    });
 });
 
