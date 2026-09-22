@@ -2,7 +2,7 @@ export default {
     /**
      * Constants
      */
-    VERSION: '0.5.1',
+    VERSION: '0.6.0',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
@@ -54,7 +54,9 @@ export default {
     pendingFlows: new Set(), // Set to store pending flows
     waitingFlows: new Set(), // Flows whose trigger is armed and has not fired yet
     lateFlows: new Set(), // Flows created for processes added while a run is in progress
-    pendingProcesses: new Set(), // Set to store pending processes
+    processIndex: new Map(), // Every process of the run, by prefixed id
+    waiters: new Map(), // Prefixed id -> processes waiting for it to settle
+    _cyclesQueued: false, // A breakCycles() pass is due at the end of this task
     processStates: new Map(), // Settled processes: id -> 'completed', 'failed' or 'skipped'
     loadActions: new Set(), // Set to store before load triggers
     initActions: new Set(), // Set to store init triggers
@@ -260,6 +262,13 @@ export default {
          * Add to flow for flow-level execution
          */
         this.getOrCreateFlow(normalizedFlowId).push(config);
+        this.processIndex.set(config.id, config);
+
+        /**
+         * A process added during a run can close a cycle that was not there
+         * when the run began.
+         */
+        if (this.hasStarted) this.recheckCycles();
 
         /**
          * Return QSL instance for chaining
@@ -336,7 +345,8 @@ export default {
         this.pendingFlows.clear();
         this.waitingFlows.clear();
         this.lateFlows.clear();
-        this.pendingProcesses.clear();
+        this.processIndex.clear();
+        this.waiters.clear();
         this.processStates.clear();
         this.onAllComplete = null;
         this.globalResolve = null;
@@ -481,23 +491,35 @@ export default {
         if (process._settled) return;
         process._settled = true;
 
+        const detail = { ...process, id: process.id };
         if (outcome === 'failed') {
-            this.fire('ERROR', { ...process, id: process.id, error });
+            detail.error = error;
+            this.fire('ERROR', detail);
         } else if (outcome === 'skipped') {
-            this.log('PROCESS_SKIPPED', process.id, process.skipReason || null);
-            this.fire('SKIPPED', { ...process, id: process.id, reason: process.skipReason || null });
+            detail.reason = process.skipReason || null;
+            this.log('PROCESS_SKIPPED', process.id, detail.reason);
+            this.fire('SKIPPED', detail);
         } else {
             this.log('PROCESS_COMPLETED', process.id);
-            this.fire('COMPLETED', { ...process, id: process.id });
+            this.fire('COMPLETED', detail);
         }
 
-        if (this.processCompleteActions.size) {
-            for (const action of this.processCompleteActions) {
-                if (typeof action === 'function') action.call(this, process);
-            }
+        for (const action of this.processCompleteActions) {
+            if (typeof action === 'function') action.call(this, process);
         }
         this.processStates.set(process.id, outcome);
         process._running = false;
+
+        /**
+         * Wake exactly the processes waiting for this one.
+         */
+        const waiting = this.waiters.get(process.id);
+        if (waiting) {
+            this.waiters.delete(process.id);
+            for (const other of waiting) {
+                if (!other._settled && !other._depsResolved && --other._waitingFor <= 0) this.resolveDependencies(other);
+            }
+        }
     },
 
     /**
@@ -694,16 +716,21 @@ export default {
         /**
          * Wait for dependency flows
          */
-        if (Array.isArray(options.depends) && options.depends.length) {
-            options.depends = [...new Set(options.depends)];
+        const depends = Array.isArray(options.depends) && options.depends.length;
+        if (depends) {
+            options = { ...options, depends: [...new Set(options.depends)] };
             this.pendingFlows.add(flowId);
         }
 
-        
         /**
          * Update options partially with fallbacks to previous state
          */
         this.flowOptions.set(flowId, { ...prevOptions, ...options });
+
+        /**
+         * New flow dependencies during a run can close a cycle.
+         */
+        if (depends && this.hasStarted) this.recheckCycles();
 
         /**
          * Return QSL instance for chaining
@@ -712,53 +739,191 @@ export default {
     },
 
     /**
-     * Find dependency cycles, among flows and among processes, and skip every
-     * member with reason 'circular'. Only the members: something that merely
-     * depends on a cycle is left alone, and settles by the usual rules once
-     * the cycle's members have been skipped.
+     * Look for cycles again once the current task is done. Processes are
+     * usually added in bursts; one pass covers the whole burst. Nothing on a
+     * cycle can start in the meantime, since it waits for something else on
+     * the cycle, and breakCycles() lets go of whatever already waits.
      *
      * @returns {void}
      */
-    breakCycles() {
-        /**
-         * Whether `start` can reach itself by following dependencies.
-         */
-        const onCycle = (start, getDeps) => {
-            const seen = new Set();
-            const stack = [...getDeps(start)];
-            while (stack.length) {
-                const id = stack.pop();
-                if (id === start) return true;
-                if (seen.has(id)) continue;
-                seen.add(id);
-                stack.push(...getDeps(id));
-            }
-            return false;
-        };
+    recheckCycles() {
+        if (this._cyclesQueued) return;
+        this._cyclesQueued = true;
+        queueMicrotask(() => {
+            this._cyclesQueued = false;
+            if (this.hasStarted) this.breakCycles(true);
+        });
+    },
 
-        const flowDeps = (id) => (this.flowOptions.get(this.normalizeFlowId(id))?.depends) || [];
-        const circularFlows = [];
-        for (const [fid, options] of this.flowOptions.entries()) {
-            if (options.depends?.length && onCycle(fid, flowDeps)) circularFlows.push(fid);
+    /**
+     * Find everything that waits in a circle and skip it with reason
+     * 'circular'.
+     *
+     * One graph holds every kind of waiting: a process waits for the
+     * processes in its `depends`, for the one before it in an ordered flow,
+     * and, until its flow starts, for the flows its flow depends on; a late
+     * flow waits for the regular flows and for the late flows that would run
+     * before it; a flow waits for its processes. A cycle can run through any
+     * mix of these, so they are searched together (Tarjan's algorithm, linear
+     * in the size of the graph).
+     *
+     * Flows that depend on each other in a circle are skipped whole, as
+     * before. Any other cycle passes through processes that have not started,
+     * and skipping those is enough to break it: flows on it are let go once
+     * their processes settle. Something that merely depends on a cycle
+     * settles by the usual rules once the cycle is broken.
+     *
+     * Runs when load() starts, and again whenever a process or flow
+     * dependencies are added during the run; then, with `release`, flows
+     * waiting for a skipped one are let go at once.
+     *
+     * @param {boolean} [release=false]
+     * @returns {void}
+     */
+    breakCycles(release = false) {
+        const { READY, COMPLETED } = this.FLOW_STATE;
+        const options = (fid) => this.flowOptions.get(fid);
+        const open = (fid) => options(fid)?.status !== COMPLETED;
+        const edges = new Map();
+        const flowEdges = new Map();
+        const regular = [];
+
+        /**
+         * Flows are nodes by id; processes by object, not id: a late add
+         * may reuse the id of a process that is still running.
+         */
+        for (const [fid, o] of this.flowOptions) {
+            if (!open(fid)) continue;
+            const deps = o.status === READY ? (o.depends || []).map((d) => this.normalizeFlowId(d)).filter((d) => options(d) && open(d)) : [];
+            edges.set(fid, [...deps]);
+            flowEdges.set(fid, deps);
+            if (!this.lateFlows.has(fid)) regular.push(fid);
         }
+        for (const processes of this.flows.values()) {
+            for (const p of processes) if (!p._settled) edges.set(p, []);
+        }
+
+        for (const [fid, processes] of this.flows) {
+            if (!open(fid)) continue;
+            const o = options(fid);
+
+            /**
+             * A process that has not started waits for the flows its flow
+             * depends on. Until a late flow starts, it waits for the regular
+             * flows, and for late flows before it that are running or would
+             * be started first; one that is paused, waits for a trigger or
+             * for other flows does not hold it up.
+             */
+            const waits = [...flowEdges.get(fid)];
+            if (o.status === READY && this.lateFlows.has(fid)) {
+                waits.push(...regular);
+                for (const other of this.lateFlows) {
+                    if (other === fid) break;
+                    const x = options(other);
+                    if (open(other) && (x.status !== READY || (!x.paused && x.trigger == null && !this.pendingFlows.has(other)))) waits.push(other);
+                }
+            }
+
+            let previous = null;
+            for (const p of o.ordered ? processes.slice().sort((a, b) => (b.priority || 0) - (a.priority || 0)) : processes) {
+                if (!p._settled) {
+                    edges.get(fid).push(p);
+                    if (!p._started) {
+                        const out = edges.get(p);
+                        if (!p.skipped && Array.isArray(p.depends)) {
+                            for (const dep of p.depends) {
+                                const id = this.PREFIX + dep;
+                                const target = this.processIndex.get(id);
+                                if (target && !target._settled && !this.processStates.has(id)) out.push(target);
+                            }
+                        }
+                        if (previous) out.push(previous);
+                        out.push(...waits);
+                    }
+                }
+                if (o.ordered) previous = p._settled ? null : p;
+            }
+        }
+
+        /**
+         * Both searched before anything is skipped, so a `depends` cycle is
+         * found even when it also runs through a flow cycle.
+         */
+        const circularFlows = this.cyclic(flowEdges);
+        const circular = this.cyclic(edges);
+
+        let flowSkipped = false;
         for (const fid of circularFlows) {
-            this.error('CIRC_FLOW_DEP_SKIPPED', fid, this.flowOptions.get(fid).depends);
+            if (options(fid).status !== READY) continue;
+            this.error('CIRC_FLOW_DEP_SKIPPED', fid, options(fid).depends || []);
             this.pendingFlows.delete(fid);
             this.skipFlow(fid, 'circular');
+            flowSkipped = true;
         }
+        for (const p of circular) {
+            if (!p.id || p._settled || p._started || p.skipped) continue;
+            this.error('CIRC_PROCESS_DEP_SKIPPED', p.id, p.depends || []);
+            p.skipped = true;
+            p.skipReason = 'circular';
 
-        const processes = new Map();
-        for (const flow of this.flows.values()) {
-            for (const process of flow) processes.set(process.id, process);
-        }
-        const processDeps = (id) => (processes.get(id)?.depends || []).map(dep => this.PREFIX + dep);
-        for (const process of processes.values()) {
-            if (process.depends?.length && onCycle(process.id, processDeps)) {
-                this.error('CIRC_PROCESS_DEP_SKIPPED', process.id, process.depends);
-                process.skipped = true;
-                process.skipReason = 'circular';
+            /**
+             * Already waiting: let it go, and it settles as skipped.
+             */
+            if (p._waitResolve) {
+                p._triggered = p._depsResolved = true;
+                p._waitResolve();
             }
         }
+        if (flowSkipped && release) this.checkPendingFlows();
+    },
+
+    /**
+     * The nodes of a graph that lie on a cycle: members of a strongly
+     * connected component with more than one node, or with an edge to
+     * itself. Tarjan's algorithm, iteratively, so a long chain cannot
+     * overflow the stack.
+     *
+     * @param {Map<*, Array>} edges - Node to the nodes it waits for.
+     * @returns {Array}
+     */
+    cyclic(edges) {
+        const index = new Map();
+        const low = new Map();
+        const stack = [];
+        const done = new Set();
+        const found = [];
+        for (const root of edges.keys()) {
+            if (index.has(root)) continue;
+            const work = [[root, 0]];
+            while (work.length) {
+                const frame = work[work.length - 1];
+                const node = frame[0];
+                const next = edges.get(node);
+                if (!frame[1]) {
+                    low.set(node, index.size);
+                    index.set(node, index.size);
+                    stack.push(node);
+                }
+                if (frame[1] < next.length) {
+                    const to = next[frame[1]++];
+                    if (!edges.has(to) || done.has(to)) continue;
+                    if (index.has(to)) low.set(node, Math.min(low.get(node), index.get(to)));
+                    else work.push([to, 0]);
+                    continue;
+                }
+                work.pop();
+                if (work.length) {
+                    const parent = work[work.length - 1][0];
+                    low.set(parent, Math.min(low.get(parent), low.get(node)));
+                }
+                if (low.get(node) === index.get(node)) {
+                    const component = stack.splice(stack.lastIndexOf(node));
+                    for (const member of component) done.add(member);
+                    if (component.length > 1 || next.includes(node)) found.push(...component);
+                }
+            }
+        }
+        return found;
     },
 
     /**
@@ -769,38 +934,43 @@ export default {
     checkPendingFlows() {
         if (!this.pendingFlows.size) return;
         let skipped = false;
+        const flow = (id) => this.flowOptions.get(this.normalizeFlowId(id));
         for (const pendingFlowId of this.pendingFlows) {
             const pendingOptions = this.flowOptions.get(pendingFlowId);
-            if (
-                pendingOptions &&
-                pendingOptions.depends &&
-                pendingOptions.depends.every(depId => {
-                    const depOpt = this.flowOptions.get(this.normalizeFlowId(depId));
-                    return depOpt && depOpt.status === this.FLOW_STATE.COMPLETED;
-                })
-            ) {
-                /**
-                 * Paused: stays pending until runFlow() or runGroup().
-                 */
-                if (pendingOptions.paused) continue;
+            const depends = pendingOptions?.depends || [];
 
+            /**
+             * A flow it depends on does not exist: skip it, and let the flows
+             * waiting for it move on.
+             */
+            const missing = depends.filter((id) => !flow(id));
+            if (missing.length) {
                 this.pendingFlows.delete(pendingFlowId);
-
-                /**
-                 * Strict: a dependency flow that was skipped, or in which a
-                 * process failed, takes this flow down with it.
-                 */
-                const strict = pendingOptions.strict != null ? pendingOptions.strict : this.strict;
-                if (strict === true && pendingOptions.depends.some(depId =>
-                    this.flowOptions.get(this.normalizeFlowId(depId))?.outcome !== 'completed'
-                )) {
-                    this.skipFlow(pendingFlowId, 'dependency');
-                    skipped = true;
-                    continue;
-                }
-
-                this.runFlow(pendingFlowId);
+                this.error('FLOW_DEP_SKIPPED', { flow: pendingFlowId, depends: missing.join(', ') });
+                this.skipFlow(pendingFlowId, 'dependency');
+                skipped = true;
+                continue;
             }
+
+            /**
+             * Paused: stays pending until runFlow() or runGroup().
+             */
+            if (!depends.every((id) => flow(id).status === this.FLOW_STATE.COMPLETED) || pendingOptions.paused) continue;
+
+            this.pendingFlows.delete(pendingFlowId);
+
+            /**
+             * Strict: a dependency flow that was skipped, or in which a
+             * process failed, takes this flow down with it.
+             */
+            const strict = pendingOptions.strict != null ? pendingOptions.strict : this.strict;
+            if (strict === true && depends.some((id) => flow(id).outcome !== 'completed')) {
+                this.skipFlow(pendingFlowId, 'dependency');
+                skipped = true;
+                continue;
+            }
+
+            this.runFlow(pendingFlowId);
         }
 
         /**
@@ -825,7 +995,6 @@ export default {
             process.skipReason = process.skipReason || reason;
             this.settle(process, 'skipped');
         }
-        this.checkPendingProcesses();
     },
 
     /**
@@ -888,35 +1057,47 @@ export default {
     /**
      * Resolve a process's dependencies if they are all settled.
      *
+     * Each dependency is looked up among the processes that exist. One that
+     * does not is reported and does not hold the process back; the others
+     * are still waited for. While any is unsettled the process is recorded as
+     * waiting for it and counts it; settle() counts down and comes back here
+     * when the last one settles, so a process with many dependencies is
+     * looked at once per dependency, not once per dependency per settle.
+     *
+     * Strict: a dependency that failed, was skipped or does not exist skips
+     * the process, without waiting for its trigger.
+     *
      * @param {Object} process
      * @returns {boolean} True when the process no longer waits on anything.
      */
     resolveDependencies(process) {
-        const missingDeps = process.depends.filter(depId => {
-            const hasProcess = Array.from(this.flows.values()).some(flow =>
-                flow.some(p => p.id === this.PREFIX + depId)
-            );
-            return !this.processStates.has(this.PREFIX + depId) && !hasProcess;
-        });
-        if (missingDeps.length) {
-            this.error('DEP_NOT_FOUND', process.id, `${missingDeps.join(', ')}`);
-            process._depsResolved = true;
-            process._triggered = true;
-            process._waitResolve?.();
-            return true;
+        let waiting = 0;
+        let unmet = false;
+        const missing = [];
+        for (const dep of Array.isArray(process.depends) ? process.depends : []) {
+            const id = this.PREFIX + dep;
+            const state = this.processStates.get(id);
+            if (state) {
+                if (state !== 'completed') unmet = true;
+            } else if (!this.processIndex.has(id)) {
+                missing.push(dep);
+            } else {
+                waiting++;
+                if (!this.waiters.has(id)) this.waiters.set(id, new Set());
+                this.waiters.get(id).add(process);
+            }
         }
-
-        if (!process.depends.every(depId => this.processStates.has(this.PREFIX + depId))) return false;
-
-        process._depsResolved = true;
+        process._waitingFor = waiting;
+        if (waiting) return false;
 
         /**
-         * Strict: a failed or skipped dependency skips this process now,
-         * without waiting for its trigger.
+         * Reported once, when nothing else is left to wait for: a process
+         * added meanwhile under that id would have been waited for.
          */
-        if (this.isStrict(process) && process.depends.some(depId =>
-            this.processStates.get(this.PREFIX + depId) !== 'completed'
-        )) {
+        if (missing.length) this.error('DEP_NOT_FOUND', process.id, missing.join(', '));
+
+        process._depsResolved = true;
+        if ((unmet || missing.length) && this.isStrict(process)) {
             process.skipped = true;
             process.skipReason = 'dependency';
             process._triggered = true;
@@ -927,18 +1108,6 @@ export default {
     },
 
     /**
-     * Check all pending processes and run those whose dependencies are now resolved.
-     * 
-     * @returns {void}
-     */
-    checkPendingProcesses() {
-        if (!this.pendingProcesses.size) return;
-        for (const process of this.pendingProcesses) {
-            if (this.resolveDependencies(process)) this.pendingProcesses.delete(process);
-        }
-    },
-
-    /**
      * Check if all flows/processes are complete and resolve global promise if so.
      * 
      * @returns {void}
@@ -946,24 +1115,6 @@ export default {
     maybeComplete() {
         if ( ! this.hasStarted ) return;
 
-        /**
-         * Check for pending flows missed dependencies 
-         */
-        if ( this.pendingFlows.size ) {
-            for (const pendingFlowId of this.pendingFlows) {
-                const pendingOptions = this.flowOptions.get(pendingFlowId);
-                if (
-                    pendingOptions &&
-                    pendingOptions.depends &&
-                    pendingOptions.depends.some(depId => !this.flowOptions.has(this.normalizeFlowId(depId)))
-                ) {
-                    this.pendingFlows.delete(pendingFlowId);
-                    this.skipFlow(pendingFlowId, 'dependency');
-                    this.error('FLOW_DEP_SKIPPED', { flow: pendingFlowId, depends: `${pendingOptions.depends.filter(depId => !this.flowOptions.has(this.normalizeFlowId(depId))).join(', ')}` });
-                }
-            }
-        }
-        
         /**
          * Check completed flows
          */
@@ -1088,9 +1239,10 @@ export default {
             const options = this.flowOptions.get(fid);
 
             /**
-             * Skip if missed options or flow is already completed
+             * Only a flow that has not started: a running one must not be
+             * started twice, a completed one is done.
              */
-            if (!options || options.status === this.FLOW_STATE.COMPLETED) continue;
+            if (!options || options.status !== this.FLOW_STATE.READY) continue;
 
             /**
              * Flow-level conditions
@@ -1291,16 +1443,12 @@ export default {
         /**
          * Trigger logic for process
          */
-        if (process.trigger != null) {
-            const trigger = this.getTriggerFunction(process.trigger, process);
-            if (trigger) {
-                trigger(() => {
-                    process._triggered = true;
-                    if (process._depsResolved) process._waitResolve();
-                });
-            } else {
+        const trigger = process.trigger != null && this.getTriggerFunction(process.trigger, process);
+        if (trigger) {
+            trigger(() => {
                 process._triggered = true;
-            }
+                if (process._depsResolved) process._waitResolve();
+            });
         } else {
             process._triggered = true;
         }
@@ -1308,12 +1456,7 @@ export default {
         /**
          * Check dependencies
          */
-        if (Array.isArray(process.depends) && process.depends.length) {
-            if (!this.resolveDependencies(process)) this.pendingProcesses.add(process);
-        } else {
-            process._depsResolved = true;
-            if (process._triggered) process._waitResolve();
-        }
+        this.resolveDependencies(process);
 
         /**
          * Wait for both trigger and dependencies to be resolved
@@ -1482,16 +1625,15 @@ export default {
     async execute(process) {
         if (process.skipped) {
             this.settle(process, 'skipped');
-            this.checkPendingProcesses();
             return;
         }
         const handler = this.types.get(process.type);
         if (!handler) {
             this.error('UNKNOWN_TYPE', process.type, process.id);
             this.settle(process, 'failed', new Error('Unknown type: ' + process.type));
-            this.checkPendingProcesses();
             return;
         }
+        process._started = true;
         this.log('PROCESS_STARTED', process.id);
         this.fire('STARTED', { ...process, id: process.id });
         
@@ -1572,7 +1714,6 @@ export default {
                     this.error('PROCESS_FAILED', process.id, error);
                 }
                 this.settle(process, 'failed', error);
-            })
-            .then(() => this.checkPendingProcesses());
+            });
     }
 };

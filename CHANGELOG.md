@@ -6,6 +6,52 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-22
+
+Found by property tests that run hundreds of thousands of random
+configurations: every combination of `depends` (missing, self, cycles),
+`strict`, `ordered`, conditions, triggers, timeouts, retries, failures and
+processes added during the run.
+
+### Changed
+
+- **One graph for all waiting.** Cycles were looked for separately in process
+  `depends` and in flow `depends`, and not in the order of ordered flows or
+  the way late flows wait for the regular ones. A cycle through a mix of these
+  (a process depending on one later in its ordered flow, or on a process in a
+  flow that waits for its own flow) went unnoticed and the run never ended.
+  Now every kind of waiting is one graph, searched with Tarjan's algorithm.
+  Flows that depend on each other in a circle are skipped whole, as before;
+  any other cycle is broken by skipping the processes on it that have not
+  started, with reason `'circular'`.
+- **A missing dependency counts as skipped for `strict`.** A strict process
+  whose `depends` names a process that does not exist is skipped with reason
+  `'dependency'`, as when a dependency was skipped. Without `strict` it runs,
+  as before.
+- **Dependencies are looked up by id.** A dependency exists when a process
+  with that id has been added, in any flow; the lookup is a map, not a scan.
+
+### Fixed
+
+- A dependency that did not exist released the process at once: it no longer
+  waited for its other dependencies, and did not apply `strict` to them. It
+  also ran the process without waiting for its trigger.
+- Cycles made during the run, by a process added late or flow dependencies set
+  late, were not looked for, and the run never ended.
+- A flow depending on a flow that was skipped because its own dependency did
+  not exist waited forever.
+
+### Performance
+
+- Dependencies no longer rescan every waiting process whenever one settles.
+  Each settle wakes exactly the processes waiting for it, and a process
+  waiting for many is looked at once per dependency. A chain of 2,000
+  processes loads in about 15 ms instead of 7 s; a process that depends on
+  2,000 others, in about 25 ms. Loading grows linearly with the number of
+  processes.
+- Processes added in a burst during the run are checked for cycles in one
+  pass at the end of the task, not once each.
+
 ## [0.5.1] - 2026-09-22
 
 ### Added
@@ -593,7 +639,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Quietsapa/qsl/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Quietsapa/qsl/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Quietsapa/qsl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Quietsapa/qsl/compare/v0.3.2...v0.4.0

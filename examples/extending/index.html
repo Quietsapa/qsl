@@ -330,6 +330,7 @@ window.QSLReady = function () {
   /**
    * A typo in a dependency: logged as not found, and the process runs
    * anyway rather than waiting for something that will never exist.
+   * With strict: true it would be skipped instead.
    */
   qsl.add({ id: 'typo', depends: ['analytcs'] }, 'misconfigured');
 

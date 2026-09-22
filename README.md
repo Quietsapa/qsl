@@ -154,10 +154,19 @@ after its trigger and dependencies, so a long wait cannot run it in a context
 that no longer applies.
 
 **Dependency** — `depends` makes a process or flow wait for others to finish.
-Circular dependencies are broken rather than deadlocking: every member of a
-cycle is skipped with reason `'circular'`, and whatever depends on the cycle
-settles by the usual rules. A dependency that does not exist is logged and
-ignored.
+Dependencies are looked up by id among the processes and flows that actually
+exist. One that does not is logged, and the rest are still waited for; a
+`strict` process counts it as skipped and is skipped too.
+
+Circular waiting is broken rather than deadlocking. QSL sees every kind of
+waiting as one graph: `depends` between processes, the order of an ordered
+flow, `depends` between flows, and late flows waiting for the regular ones. A
+cycle through any mix of these is found when `load()` starts, and again
+whenever processes or flow dependencies are added during the run. Flows that
+depend on each other in a circle are skipped whole; any other cycle is broken
+by skipping the processes on it that have not started. Either way they are
+skipped with reason `'circular'`, and whatever merely depends on the cycle
+settles by the usual rules.
 
 **Late adds** — a flow created while a run is in progress, by `add()` or by
 `setFlowOptions()`, is a late flow: it starts once the regular flows are done,
@@ -170,7 +179,7 @@ list it had when it started.
 **Outcome** — every process settles exactly once: completed, failed or
 skipped. All three release whatever depends on it. By default a dependent then
 runs regardless; set `strict: true` and it is skipped instead when a
-dependency failed or was skipped, and so on down the chain. `strict` can be set
+dependency failed, was skipped or does not exist, and so on down the chain. `strict` can be set
 on a process, on a flow, or for the whole instance, and the nearest setting
 wins. For a flow, `strict` means: skip if a flow it depends on was skipped or
 had a failure inside it.
@@ -451,7 +460,8 @@ Exactly one of `completed`, `error` or `skipped` fires per process. On
 element's `error` event for the built-in types, or an `Error` named
 `TimeoutError` when the process ran out of time. On `QSL:skipped`,
 `detail.reason` says why: `'condition'`, `'dependency'` (a `strict` process or
-flow whose dependency failed or was skipped) or `'circular'`.
+flow whose dependency failed, was skipped or does not exist) or
+`'circular'` (it was on a cycle of waiting).
 
 ## TypeScript
 
