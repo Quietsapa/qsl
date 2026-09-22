@@ -358,6 +358,37 @@ await scenario('modules: plain module scripts, as the browser runs them', '../sc
     if (r.modules !== 7) throw new Error('module scripts: ' + r.modules);
 }, {}, true, [/in dependency/]);
 
+/**
+ * Trusted Types, from fixtures: a page that enforces them and allows QSL's
+ * policy, and one that allows none. Only engines with Trusted Types enforce
+ * the second; elsewhere both behave like any page.
+ */
+await scenario('trusted-types: every type works with the qsl policy allowed', '../scripts/fixtures/trusted-types/allowed.html', async (page) => {
+    await until(page, () => window.done === true);
+    const r = await page.evaluate(() => ({
+        outcomes: window.outcomes,
+        ran: [window.externalRan, window.inlineRan, !!document.getElementById('from-html')],
+        enforced: typeof window.trustedTypes !== 'undefined',
+    }));
+    for (const id of ['script', 'inline', 'html', 'stylesheet', 'style', 'pixel']) {
+        if (r.outcomes[id] !== 'completed') throw new Error(`${id}: ${r.outcomes[id]}`);
+    }
+    if (r.ran.join() !== 'true,true,true') throw new Error('ran: ' + r.ran.join());
+    console.log(`      (${engine}: Trusted Types ${r.enforced ? 'enforced' : 'not supported'})`);
+});
+
+await scenario('trusted-types: without the policy, the script and markup types fail rather than hang', '../scripts/fixtures/trusted-types/denied.html', async (page) => {
+    await until(page, () => window.done === true);
+    const r = await page.evaluate(() => ({ outcomes: window.outcomes, enforced: typeof window.trustedTypes !== 'undefined' }));
+    const blocked = r.enforced ? 'error' : 'completed';
+    for (const id of ['script', 'inline', 'html']) {
+        if (r.outcomes[id] !== blocked) throw new Error(`${id}: ${r.outcomes[id]}, expected ${blocked}`);
+    }
+    for (const id of ['stylesheet', 'style', 'pixel']) {
+        if (r.outcomes[id] !== 'completed') throw new Error(`${id}: ${r.outcomes[id]}`);
+    }
+}, {}, true, [/TrustedScript|TrustedHTML|TrustedScriptURL|Trusted Type/i]);
+
 await browser.close();
 server.close();
 

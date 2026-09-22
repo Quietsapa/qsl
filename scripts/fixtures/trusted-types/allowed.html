@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="require-trusted-types-for 'script'; trusted-types qsl" />
+<title>QSL e2e fixture — Trusted Types, allowed</title>
+<!--
+  Not an example: a fixture for scripts/e2e.mjs. The page enforces Trusted Types and allows the qsl policy: every type works.
+-->
+</head>
+<body>
+<div id="target"></div>
+<p class="from-stylesheet from-style">styled</p>
+<script src="/dist/qsl.min.js"></script>
+<script>
+  var qsl = window.__QSL__;
+  window.outcomes = {};
+  qsl.useEvents();
+  ['completed', 'error'].forEach(function (name) {
+    window.addEventListener('QSL:' + name, function (e) {
+      window.outcomes[e.detail.id.replace(/^qsl-/, '')] = name;
+    });
+  });
+
+  qsl.add({ id: 'script', type: 'script', src: './external.js' });
+  qsl.add({ id: 'inline', type: 'inline-script', code: 'window.inlineRan = true;' });
+  qsl.add({ id: 'html', type: 'html', tag: 'div', html: '<b id="from-html">markup</b>' });
+  qsl.add({ id: 'stylesheet', type: 'stylesheet', href: './style.css' });
+  qsl.add({ id: 'style', type: 'style', code: '.from-style { font-weight: 700; }' });
+  qsl.add({ id: 'pixel', type: 'pixel', src: './pixel.gif' });
+
+  qsl.load().then(function () { window.done = true; });
+</script>
+</body>
+</html>

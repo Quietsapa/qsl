@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-22
+
+### Added
+
+- **Trusted Types.** On a page whose CSP enforces them
+  (`require-trusted-types-for 'script'`), the browser refused the strings QSL
+  set as a script's code and URL and as `innerHTML`, and the `script`,
+  `inline-script` and `html` types failed. They now go through a policy named
+  `qsl`, which the page allows with `trusted-types qsl`. The policy passes
+  values through unchanged: the configuration is trusted, and allowing the
+  policy is the site saying so. Without Trusted Types in the browser nothing
+  changes. See SECURITY.md.
+
+### Development
+
+- Tests for the paths through the core the other suites left out: string
+  conditions resolved through plugins, preload details, the order flows start
+  in, late flows depending on late flows, triggers that fire twice or are
+  armed twice, and the core's guards. Branch coverage of the core is up from
+  about 91% to 96%.
+- End-to-end fixtures for Trusted Types: a page that allows the `qsl` policy,
+  where every type works, and one that allows none, where the three types that
+  need a policy fail with an error instead of hanging.
+
+### Documentation
+
+- SECURITY.md: a section on Trusted Types, and the paragraph about the
+  wrapper around inline modules, removed in 0.3.0, rewritten to match what
+  QSL does now.
+
 ## [0.5.0] - 2026-09-22
 
 A leaner core and a quiet console: one map for how processes ended, groups
@@ -563,7 +593,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Quietsapa/qsl/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Quietsapa/qsl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Quietsapa/qsl/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/Quietsapa/qsl/compare/v0.3.1...v0.3.2

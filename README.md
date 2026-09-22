@@ -513,8 +513,12 @@ locally, open any `index.html` in a browser; no build step or server needed.
 several conditions compile regular expressions from strings. Never build a
 configuration from untrusted input.
 
+On a page that enforces Trusted Types, allow QSL's policy by name:
+`trusted-types qsl` in the Content Security Policy. It passes values through
+unchanged, since the configuration is trusted.
+
 Read [SECURITY.md](SECURITY.md) before deploying. It covers the trust model,
-Content Security Policy, and how to report a vulnerability.
+Content Security Policy and Trusted Types, and how to report a vulnerability.
 
 ## Development
 

@@ -6,6 +6,35 @@ const bypassSuffix = (source, bypassCache) =>{
 }
 
 /**
+ * Trusted Types. On a page whose CSP says `require-trusted-types-for
+ * 'script'`, the browser refuses plain strings for a script's code and URL
+ * and for innerHTML. QSL hands them over through its own policy, named
+ * `qsl`, which the page has to allow (`trusted-types qsl`).
+ *
+ * The policy passes values through unchanged. QSL does not sanitise: its
+ * configuration is code, written by the site, and must never contain data a
+ * visitor controls. Allowing `qsl` in the CSP is the site saying it trusts
+ * that configuration. Without Trusted Types in the browser, or without the
+ * policy allowed, strings are used as they are, and on an enforcing page the
+ * browser's refusal fails the process.
+ */
+let policy;
+const trusted = (kind, value) => {
+    if (policy === undefined) {
+        policy = null;
+        try {
+            const pass = (v) => v;
+            policy = window.trustedTypes?.createPolicy('qsl', { createHTML: pass, createScript: pass, createScriptURL: pass }) || null;
+        } catch (e) {
+            /**
+             * Not allowed by the page's CSP: stay with strings.
+             */
+        }
+    }
+    return policy ? policy[kind](value) : value;
+}
+
+/**
  * Resolve the process, then run its onComplete. An onComplete that throws is
  * rethrown on its own tick: it shows up as an uncaught error, but it cannot
  * leave the process unsettled or be mistaken for a load failure.
@@ -87,7 +116,7 @@ const InlineScript = {
             dom: true,
             onElement: (el, { code, module }) => {
                 if (module) el.type = 'module';
-                if (code) el.textContent = code;
+                if (code) el.textContent = trusted('createScript', code);
             },
             /**
              * A classic inline script has run by then, synchronously. A
@@ -116,7 +145,7 @@ const Script = {
                 if (defer) el.defer = defer;
                 if (crossOrigin) el.crossOrigin = crossOrigin;
                 if (integrity) el.integrity = integrity;
-                if (src) el.src = src + bypassSuffix(src, bypassCache);
+                if (src) el.src = trusted('createScriptURL', src + bypassSuffix(src, bypassCache));
             }
         }, callbacks);
     }
@@ -250,7 +279,11 @@ const HTML = {
             ...config,
             dom: true,
             onElement: (el, { html = '', id = '', className = '', style = {} }) => {
-                if (html) el.innerHTML = html;
+                /**
+                 * Markup from the configuration, which the site wrote; see
+                 * `trusted` above.
+                 */
+                if (html) el.innerHTML = trusted('createHTML', html);
                 if (id) el.id = id;
                 if (className) el.className = Array.isArray(className) ? className.join(' ') : className;
                 if ( style && typeof style === 'object' ) {

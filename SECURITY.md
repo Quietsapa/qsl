@@ -39,11 +39,10 @@ Consequences you must design around:
    matters for your threat model, load QSL in a context you control and
    treat every other script on the page as able to interfere with it.
 
-Identifiers are handled more carefully than content. The `module` variant of
-`inline-script` builds a wrapper function as source text; `flowId`, the process
-id and the internal event name are serialised with `JSON.stringify` so that a
-hostile identifier cannot break out of its string literal. The script body
-itself is, by definition, executed as written.
+Identifiers are never turned into code. QSL builds no source text of its own:
+the code of an `inline-script` is inserted exactly as configured, and ids,
+flow names and selectors are only ever used as data. The script body itself
+is, by definition, executed as written.
 
 ## Content Security Policy
 
@@ -56,6 +55,22 @@ requires a nonce or hash for them. There is currently no built-in nonce
 support; if you need it, pass one through `data` or open an issue describing
 your setup. The `script`, `stylesheet`, `pixel`, `shadow` and `html` types work
 under a strict policy as long as the origins they reference are allowed.
+
+### Trusted Types
+
+A page that enforces Trusted Types (`require-trusted-types-for 'script'`)
+refuses plain strings for a script's code and URL and for `innerHTML`. QSL
+passes them through its own policy, named `qsl`, which the page has to allow:
+
+```
+Content-Security-Policy: require-trusted-types-for 'script'; trusted-types qsl
+```
+
+The policy passes values through unchanged; it does not sanitise. Allowing it
+is the site stating that QSL's configuration is trusted, which is the model
+above. On a page that enforces Trusted Types without allowing `qsl`, the
+`script`, `inline-script` and `html` types fail, with an error, and the others
+work. In a browser without Trusted Types nothing changes.
 
 ## Reporting a vulnerability
 
