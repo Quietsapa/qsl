@@ -1,6 +1,6 @@
 {
   "name": "@quietsapa/qsl",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "A modern orchestrator for the third-party code that has to live in the browser. Scripts, styles, pixels and custom elements, with dependencies, triggers, conditions and timeouts.",
   "type": "module",
   "license": "Apache-2.0",

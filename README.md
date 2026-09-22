@@ -203,6 +203,15 @@ time limit covers all attempts together, and an attempt that timed out is
 never retried: its resource may still arrive and run, and a second copy would
 run twice. Set it on a process, a flow or the instance, like `timeout`.
 
+`retryDelay` is how many milliseconds to wait before each retry, `0` by
+default: a server that just answered 503 rarely recovers in the same
+millisecond. The wait counts against the `timeout` like the attempts do, and
+no attempt starts once it has run out.
+
+```js
+core.add({ id: 'sdk', type: 'script', src: 'https://cdn.example/sdk.js', retries: 2, retryDelay: 1000, timeout: 8000 });
+```
+
 ## API
 
 ### `init()`
@@ -249,6 +258,7 @@ Sets options on a flow, creating it if needed. Merges with previous options.
 | `strict` | — | Skip when a dependency failed or was skipped. Not set: inherits `qsl.strict` |
 | `timeout` | — | Default `timeout` for the flow's processes, in ms. Not set: inherits `qsl.timeout` |
 | `retries` | — | Default `retries` for the flow's processes. Not set: inherits `qsl.retries` |
+| `retryDelay` | — | Default `retryDelay` for the flow's processes, in ms. Not set: inherits `qsl.retryDelay` |
 | `preload` | `false` | Emit `<link rel=preload>` for scripts and styles |
 | `fireEvents` | `true` | Let the `events` plugin re-dispatch lifecycle events |
 
@@ -277,6 +287,8 @@ Sets options on a flow, creating it if needed. Merges with previous options.
   unless you set it.
 - `retries` — instance default for `retries` (see Retries above). `0` unless
   you set it.
+- `retryDelay` — instance default for `retryDelay`, in ms. `0` unless you set
+  it.
 - `yield` — `true` by default: before each process runs, QSL gives the main
   thread back with `scheduler.yield()`, where the browser has it. Processes
   released together (a flow starting, a dependency settling, the next step of
@@ -322,7 +334,7 @@ own images and scripts. A flow with `preload` passes it on to the
 `<link rel=preload>` as well.
 
 Common fields across types: `id`, `type`, `depends`, `condition`, `trigger`,
-`priority`, `delay`, `strict`, `timeout`, `retries`, `data` (rendered as `data-*`
+`priority`, `delay`, `strict`, `timeout`, `retries`, `retryDelay`, `data` (rendered as `data-*`
 attributes), `footer` (append to `<body>` instead of `<head>`), and the
 callbacks `onBeforeStart`, `onComplete`, `onError`.
 

@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-22
+
+### Added
+
+- **`retryDelay`**: how many milliseconds to wait before each retry, `0` by
+  default. Retries used to follow a failure at once, which rarely helps with
+  a server that has just answered 503. Set it on a process, a flow or the
+  instance (`qsl.retryDelay`), like `retries`; late flows inherit it. The
+  wait counts against the `timeout`, and no attempt starts once the timeout
+  has run out.
+
 ## [0.3.1] - 2026-09-22
 
 Testing in more than one browser, and inline snippets in the slim bundle. The
@@ -484,7 +495,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/Quietsapa/qsl/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Quietsapa/qsl/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Quietsapa/qsl/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Quietsapa/qsl/compare/v0.2.0...v0.2.1

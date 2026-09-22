@@ -2,7 +2,7 @@ export default {
     /**
      * Constants
      */
-    VERSION: '0.3.1',
+    VERSION: '0.3.2',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
@@ -83,6 +83,7 @@ export default {
     strict: false, // Default for `strict`: skip dependents of a failed or skipped dependency
     timeout: 0, // Default for `timeout`: ms a process may take to load before it fails, 0 for no limit
     retries: 0, // Default for `retries`: how many more times a failed load is attempted
+    retryDelay: 0, // Default for `retryDelay`: ms to wait before each retry
     yield: true, // Yield to the main thread before each process runs, where scheduler.yield() exists
 
     globalBetween: 0, // Global delay between processes
@@ -241,7 +242,7 @@ export default {
                 if (options && options.status !== this.FLOW_STATE.READY) {
                     const lateId = fid + '+late-' + Math.random().toString(36).slice(2);
                     const inherited = {};
-                    for (const key of ['condition', 'strict', 'timeout', 'retries', 'fireEvents', 'group']) {
+                    for (const key of ['condition', 'strict', 'timeout', 'retries', 'retryDelay', 'fireEvents', 'group']) {
                         if (options[key] != null) inherited[key] = options[key];
                     }
                     this.setFlowOptions(inherited, lateId);
@@ -839,7 +840,7 @@ export default {
      * then the instance default.
      *
      * @param {Object} process
-     * @param {string} key - 'strict', 'timeout' or 'retries'.
+     * @param {string} key - 'strict', 'timeout', 'retries' or 'retryDelay'.
      * @returns {*}
      */
     setting(process, key) {
@@ -868,6 +869,17 @@ export default {
     retriesFor(process) {
         const retries = this.setting(process, 'retries');
         return typeof retries === 'number' && retries > 0 ? Math.floor(retries) : 0;
+    },
+
+    /**
+     * How long to wait before each retry, in ms.
+     *
+     * @param {Object} process
+     * @returns {number}
+     */
+    retryDelayFor(process) {
+        const delay = this.setting(process, 'retryDelay');
+        return typeof delay === 'number' && delay > 0 ? delay : 0;
     },
 
     /**
@@ -1518,8 +1530,11 @@ export default {
          * resource may still arrive and run. Attempts before the last get
          * a copy without onError, so onError fires once, for the outcome,
          * and `callbacks.retrying` tells the type to clean up after itself.
+         * `retryDelay` is waited out before each retry, and counts against
+         * the timeout like the attempts do.
          */
         const retries = this.retriesFor(process);
+        const retryDelay = retries ? this.retryDelayFor(process) : 0;
         const attempt = (n) => {
             const last = n >= retries;
             return Promise.resolve()
@@ -1529,7 +1544,9 @@ export default {
                 .catch((error) => {
                     if (last || timedOut) throw error;
                     this.log('PROCESS_RETRY', process.id, n + 1);
-                    return attempt(n + 1);
+                    if (!retryDelay) return attempt(n + 1);
+                    return new Promise(res => setTimeout(res, retryDelay))
+                        .then(() => timedOut ? Promise.reject(error) : attempt(n + 1));
                 });
         };
         let work = attempt(0);

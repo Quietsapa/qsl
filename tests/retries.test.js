@@ -181,6 +181,122 @@ describe('retries and timeout', () => {
     });
 });
 
+describe('retryDelay', () => {
+    /**
+     * A type that fails every attempt and records when each one started.
+     */
+    function failing() {
+        const starts = [];
+        const handler = () => { starts.push(Date.now()); return Promise.reject(new Error('down')); };
+        return { handler, starts };
+    }
+
+    it('waits the delay before each retry, not before the first attempt', async () => {
+        vi.useFakeTimers();
+        const core = await freshCore();
+        const { handler, starts } = failing();
+        core.registerType('down', handler);
+        const t0 = Date.now();
+
+        core.add({ id: 'x', type: 'down', retries: 2, retryDelay: 500 });
+        const done = core.load();
+        await vi.advanceTimersByTimeAsync(2000);
+        await done;
+
+        expect(starts.map((t) => t - t0)).toEqual([0, 500, 1000]);
+    });
+
+    it('retries at once without it', async () => {
+        vi.useFakeTimers();
+        const core = await freshCore();
+        const { handler, starts } = failing();
+        core.registerType('down', handler);
+        const t0 = Date.now();
+
+        core.add({ id: 'x', type: 'down', retries: 2 });
+        const done = core.load();
+        await vi.advanceTimersByTimeAsync(10);
+        await done;
+
+        expect(starts.map((t) => t - t0)).toEqual([0, 0, 0]);
+    });
+
+    it('takes the nearest setting: process, then flow, then instance', async () => {
+        vi.useFakeTimers();
+        const core = await freshCore();
+        const a = failing(), b = failing(), c = failing();
+        core.registerType('a', a.handler);
+        core.registerType('b', b.handler);
+        core.registerType('c', c.handler);
+        core.retryDelay = 100;
+        core.setFlowOptions({ retries: 1, retryDelay: 300 }, 'f');
+        const t0 = Date.now();
+
+        core.add({ id: 'a', type: 'a' }, 'f');
+        core.add({ id: 'b', type: 'b', retryDelay: 0 }, 'f');
+        core.add({ id: 'c', type: 'c', retries: 1 });
+        const done = core.load();
+        await vi.advanceTimersByTimeAsync(1000);
+        await done;
+
+        expect(a.starts.map((t) => t - t0)).toEqual([0, 300]);
+        expect(b.starts.map((t) => t - t0)).toEqual([0, 0]);
+        expect(c.starts.map((t) => t - t0)).toEqual([0, 100]);
+    });
+
+    it('does nothing without retries', async () => {
+        vi.useFakeTimers();
+        const core = await freshCore();
+        const { handler, starts } = failing();
+        core.registerType('down', handler);
+
+        core.add({ id: 'x', type: 'down', retryDelay: 500 });
+        const done = core.load();
+        await vi.advanceTimersByTimeAsync(10);
+        await done;
+
+        expect(starts.length).toBe(1);
+    });
+
+    it('counts against the timeout, and no attempt starts after it', async () => {
+        vi.useFakeTimers();
+        const core = await freshCore();
+        const { handler, starts } = failing();
+        core.registerType('down', handler);
+        core.useEvents();
+        const errors = [];
+        const onError = (e) => errors.push(e.detail.error.name);
+        window.addEventListener('QSL:error', onError);
+        const t0 = Date.now();
+
+        /**
+         * Attempts at 0 and 400; the next is due at 800, after the deadline.
+         */
+        core.add({ id: 'x', type: 'down', retries: 5, retryDelay: 400, timeout: 700 });
+        core.load();
+        await vi.advanceTimersByTimeAsync(3000);
+        window.removeEventListener('QSL:error', onError);
+
+        expect(starts.map((t) => t - t0)).toEqual([0, 400]);
+        expect(errors).toEqual(['TimeoutError']);
+    });
+
+    it('is inherited by a late flow', async () => {
+        vi.useFakeTimers();
+        const core = await freshCore();
+        const late = failing();
+        core.registerType('late', late.handler);
+        core.registerType('adder', () => { core.add({ id: 'l', type: 'late' }, 'f'); });
+        core.setFlowOptions({ retries: 1, retryDelay: 250 }, 'f');
+        core.add({ id: 'a', type: 'adder' }, 'f');
+        const done = core.load();
+        await vi.advanceTimersByTimeAsync(1000);
+        await done;
+
+        expect(late.starts[1] - late.starts[0]).toBe(250);
+    });
+});
+
 describe('retries with built-in types', () => {
     it('removes the failed <script> before the next attempt', async () => {
         const core = await freshCore();
