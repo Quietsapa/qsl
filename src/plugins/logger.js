@@ -1,3 +1,14 @@
+/**
+ * An Event is printed as its type and the resource it came from. Handed to
+ * the console as it is, it would keep its target, often an element already
+ * removed from the page, alive for as long as the console keeps the message.
+ */
+const describe = (arg) => {
+    if (typeof Event === 'undefined' || !(arg instanceof Event)) return arg;
+    const target = arg.target || {};
+    return [arg.type, target.currentSrc || target.src || target.href || target.tagName].filter(Boolean).join(' ');
+};
+
 export default function(QSL) {
 
     QSL.initActions.add(function() {
@@ -24,19 +35,21 @@ export default function(QSL) {
                 RESET: '[QSL] Global reset',
                 ALL_COMPLETED: '[QSL] Loading is completed',
             },
+            /**
+             * QSL's own progress, the keys in LOG, is printed only with
+             * `qsl.debug = true`: on a live page nobody wants a line per
+             * process. Anything else, such as the `message` of a console
+             * process, was asked for and is always printed.
+             */
             log(type, ...args) {
                 if (this.LOG[type]) {
-                    console.log(this.LOG[type], ...args, { timestamp: Date.now() });
+                    if (QSL.debug) console.log(this.LOG[type], ...args.map(describe));
                 } else {
-                    console.log('[QSL] ' + type, ...args);
+                    console.log('[QSL] ' + type, ...args.map(describe));
                 }
             },
             error(type, ...args) {
-                if (this.LOG[type]) {
-                    console.error(this.LOG[type], ...args);
-                } else {
-                    console.error('[QSL] ' + type, ...args);
-                }
+                console.error(this.LOG[type] || '[QSL] ' + type, ...args.map(describe));
             }
         };
         

@@ -42,6 +42,7 @@ qsl.retries = 2;
 qsl.retryDelay = 1000;
 qsl.yield = false;
 qsl.autoReset = false;
+qsl.debug = true;
 
 // @ts-expect-error the timeout is milliseconds, a number
 qsl.timeout = '5s';
@@ -137,6 +138,10 @@ qsl.setFlowOptions({ group: 'marketing', paused: true, preload: true, priority: 
 qsl.setFlowOptions({ beforeStart: () => {}, onComplete: () => {} });
 qsl.setFlowOptions({ condition: 'url:query:debug' }, true);
 qsl.runFlow('ads').pauseGroup('marketing').runGroup('marketing').reset();
+expectTypeOf(qsl.inGroup('marketing')).toEqualTypeOf<string[]>();
+expectTypeOf(qsl.processStates.get('qsl-sdk')).toEqualTypeOf<'completed' | 'failed' | 'skipped' | undefined>();
+// @ts-expect-error gone in 0.5.0: processStates says how every process ended
+qsl.completedProcesses;
 
 const flow = qsl.flowOptions.get('setup');
 if (flow) {
@@ -205,6 +210,13 @@ qsl.processCompleteActions.add(function (process) {
 });
 qsl.conditionHandlers.add((condition) => (condition === 'network:fast' ? !navigator.onLine : null));
 qsl.triggerHandlers.add((trigger) => (trigger === 'scroll:60' ? (release) => release() : null));
+qsl.allCompleteActions.add(function () { expectTypeOf(this).toEqualTypeOf<QSL>(); });
+qsl.completedFlowsActions.add((done, flows, flowOptions) => {
+    expectTypeOf(flows.get('f')).toEqualTypeOf<Process[] | undefined>();
+    expectTypeOf(flowOptions.get('f')).toEqualTypeOf<FlowState | undefined>();
+    return done;
+});
+qsl.maybeComplete();
 
 const configs: ProcessConfig[] = [{ type: 'script', src: '/a.js' }, { type: 'pixel', src: '/p.gif' }];
 configs.forEach((config) => qsl.add(config));

@@ -6,6 +6,34 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-22
+
+A leaner core and a quiet console: one map for how processes ended, groups
+read from the flows' options, and a logger that prints QSL's own progress only
+with `qsl.debug = true`. `processStates` replaces three sets, which breaks code
+that used them; the entry says what to use instead.
+
+### Changed
+
+- **`processStates` replaces `completedProcesses`, `failedProcesses` and
+  `skippedProcesses`.** The three sets recorded one fact three ways; the new
+  `Map` says how each settled process ended, by prefixed id: `'completed'`,
+  `'failed'` or `'skipped'`. `completedProcesses.has(id)` becomes
+  `processStates.has(id)`, `failedProcesses.has(id)` becomes
+  `processStates.get(id) === 'failed'`.
+- **The logger is quiet unless asked.** The full bundle printed a line to the
+  console for every process started and completed, on every page, for every
+  visitor. It now prints errors, misconfiguration and the `message` of a
+  console process; QSL's own progress needs `qsl.debug = true`. An unknown
+  type, a `depends` that points nowhere and a dependency cycle are errors now
+  rather than log lines, so they show without `debug`. Log lines no longer
+  carry a `{ timestamp }` object, and an `Event` is printed as its type and
+  source: the console keeps what it is given, and an `Event` kept the
+  failed element with it, long after it had left the page.
+- **Groups are read from the flows' options.** A flow belongs to the group its
+  `group` option names now; it used to stay in the first group it was given
+  for good. `inGroup(name)` lists the flows of a group.
+
 ## [0.4.0] - 2026-09-22
 
 TypeScript declarations, and a licence header in every bundle.
@@ -535,7 +563,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Quietsapa/qsl/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Quietsapa/qsl/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/Quietsapa/qsl/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Quietsapa/qsl/compare/v0.3.0...v0.3.1

@@ -272,7 +272,10 @@ Sets options on a flow, creating it if needed. Merges with previous options.
   `pauseGroup` pauses anything in the group that has not started yet,
   including a flow already waiting for its trigger or its dependencies;
   `runGroup` releases it, and a flow whose trigger fired during the pause
-  waits for that trigger afresh.
+  waits for that trigger afresh. A flow belongs to the group its `group`
+  option names at that moment; `inGroup(name)` lists them.
+- `processStates` — a `Map` of how each settled process ended, by prefixed id:
+  `'completed'`, `'failed'` or `'skipped'`. Cleared by `reset()`.
 - `setLogger(logger)` — supply an object with `log()` and `error()`.
 - `setOnAllComplete(fn)` — callback for the end of a run.
 - `useEvents()` — enable DOM lifecycle events.
@@ -289,6 +292,10 @@ Sets options on a flow, creating it if needed. Merges with previous options.
   you set it.
 - `retryDelay` — instance default for `retryDelay`, in ms. `0` unless you set
   it.
+- `debug` — `false` by default. With the `logger` plugin (in the full bundle),
+  `true` also prints QSL's own progress: every process started, completed or
+  skipped, retries, late adds. Errors, and misconfiguration such as an unknown
+  type or a dependency that does not exist, are printed either way.
 - `yield` — `true` by default: before each process runs, QSL gives the main
   thread back with `scheduler.yield()`, where the browser has it. Processes
   released together (a flow starting, a dependency settling, the next step of
@@ -419,7 +426,7 @@ A plugin is a function that receives the instance and registers handlers on it.
 | --- | --- |
 | `conditions` | The five condition handlers above |
 | `triggers` | The nine trigger handlers above |
-| `logger` | A console logger with readable message names |
+| `logger` | A console logger with readable message names. Errors always; QSL's own progress only with `qsl.debug = true` |
 | `events` | Re-dispatches `DOMContentLoaded` and `load` per process, so late-loaded third-party scripts that listen for them still initialise |
 
 Every plugin above is already registered in the full

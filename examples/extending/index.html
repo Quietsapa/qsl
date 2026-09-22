@@ -204,7 +204,7 @@ window.QSLReady = function () {
           if (process.onComplete) process.onComplete();
           return resolve();
         }
-        if (qsl.completedProcesses.has(process.id)) return;
+        if (qsl.processStates.has(process.id)) return;
         setTimeout(poll, 50);
       })();
     });

@@ -27,16 +27,58 @@ describe('logger plugin', () => {
         expect(core.logger.VERSION).toBe('qsl-logger');
     });
 
-    it('prints a known key as its message, followed by the arguments and a timestamp', async () => {
+    it('keeps QSL\'s own progress quiet unless qsl.debug is set', async () => {
         const core = await withLogger();
         const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-        core.log('DEP_NOT_FOUND', 'qsl-x', 'nope');
+        core.log('PROCESS_STARTED', 'qsl-x');
+        expect(spy).not.toHaveBeenCalled();
 
-        const [message, ...rest] = spy.mock.calls[0];
-        expect(message).toBe('[QSL] Dependency not found:');
-        expect(rest.slice(0, 2)).toEqual(['qsl-x', 'nope']);
-        expect(rest[2]).toHaveProperty('timestamp');
+        core.debug = true;
+        core.log('PROCESS_STARTED', 'qsl-x');
+        expect(spy.mock.calls).toEqual([['[QSL] Process started:', 'qsl-x']]);
+    });
+
+    it('prints a known key as its message and the arguments, with no timestamp object', async () => {
+        const core = await withLogger();
+        core.debug = true;
+        const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+        core.log('LATE_ADD', 'qsl-x', 'f', 'f+late-1');
+
+        expect(spy.mock.calls[0]).toEqual(['[QSL] Added to a flow that has already started, runs in a late flow:', 'qsl-x', 'f', 'f+late-1']);
+    });
+
+    it('always prints errors, and the message of a console process', async () => {
+        const core = await withLogger();
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        core.registerType('fail', () => Promise.reject(new Error('down')));
+        core.add({ id: 'hello', message: 'hello from a console process' });
+        core.add({ id: 'x', type: 'fail' });
+        core.add({ id: 'y', type: 'carousel' });
+        core.add({ id: 'z', depends: ['nope'] });
+        await core.load();
+
+        expect(log.mock.calls).toEqual([['[QSL] hello from a console process']]);
+        expect(error.mock.calls.map((c) => c[0])).toEqual(expect.arrayContaining([
+            '[QSL] Process failed:', '[QSL] Unknown type:', '[QSL] Dependency not found:',
+        ]));
+    });
+
+    it('prints an Event as its type and source, not the Event, which would keep its element alive', async () => {
+        const core = await withLogger();
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const img = document.createElement('img');
+        img.src = 'https://cdn.example/p.gif';
+        const event = new Event('error');
+        Object.defineProperty(event, 'target', { value: img });
+
+        core.error('PROCESS_FAILED', 'qsl-p', event);
+
+        expect(spy.mock.calls[0]).toEqual(['[QSL] Process failed:', 'qsl-p', 'error https://cdn.example/p.gif']);
+        expect(spy.mock.calls[0].some((a) => a instanceof Event)).toBe(false);
     });
 
     it('prints an unknown key as it is, rather than dropping it', async () => {

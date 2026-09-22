@@ -2,7 +2,7 @@ export default {
     /**
      * Constants
      */
-    VERSION: '0.4.0',
+    VERSION: '0.5.0',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
@@ -50,15 +50,12 @@ export default {
     types: new Map(), // Map to store custom resource types
     flows: new Map(), // Map to store flows
     flowOptions: new Map(), // Map to store flow options
-    flowGroups: new Map(), // Map to store flow groups
 
     pendingFlows: new Set(), // Set to store pending flows
     waitingFlows: new Set(), // Flows whose trigger is armed and has not fired yet
     lateFlows: new Set(), // Flows created for processes added while a run is in progress
     pendingProcesses: new Set(), // Set to store pending processes
-    completedProcesses: new Set(), // Ids of every settled process: completed, failed or skipped
-    failedProcesses: new Set(), // Ids of processes whose handler failed
-    skippedProcesses: new Set(), // Ids of processes that were skipped
+    processStates: new Map(), // Settled processes: id -> 'completed', 'failed' or 'skipped'
     loadActions: new Set(), // Set to store before load triggers
     initActions: new Set(), // Set to store init triggers
     addProcessFilters: new Set(), // Set to store add triggers
@@ -85,6 +82,7 @@ export default {
     retries: 0, // Default for `retries`: how many more times a failed load is attempted
     retryDelay: 0, // Default for `retryDelay`: ms to wait before each retry
     yield: true, // Yield to the main thread before each process runs, where scheduler.yield() exists
+    debug: false, // Let the logger print QSL's own progress, not only errors
 
     globalBetween: 0, // Global delay between processes
 
@@ -127,7 +125,7 @@ export default {
             return new Promise((resolve) => {
                 process.onBeforeStart?.();
                 setTimeout(() => {
-                    if ( process.message ) this.log( process.message, { timestamp: Date.now() } );
+                    if ( process.message ) this.log( process.message );
                     resolve();
                     this.callback(process.onComplete, process.id);
                 }, process.delay || 0);
@@ -335,14 +333,11 @@ export default {
          */
         this.flows.clear();
         this.flowOptions.clear();
-        this.flowGroups.clear();
         this.pendingFlows.clear();
         this.waitingFlows.clear();
         this.lateFlows.clear();
         this.pendingProcesses.clear();
-        this.completedProcesses.clear();
-        this.failedProcesses.clear();
-        this.skippedProcesses.clear();
+        this.processStates.clear();
         this.onAllComplete = null;
         this.globalResolve = null;
         this.hasStarted = false;
@@ -487,10 +482,8 @@ export default {
         process._settled = true;
 
         if (outcome === 'failed') {
-            this.failedProcesses.add(process.id);
             this.fire('ERROR', { ...process, id: process.id, error });
         } else if (outcome === 'skipped') {
-            this.skippedProcesses.add(process.id);
             this.log('PROCESS_SKIPPED', process.id, process.skipReason || null);
             this.fire('SKIPPED', { ...process, id: process.id, reason: process.skipReason || null });
         } else {
@@ -503,7 +496,7 @@ export default {
                 if (typeof action === 'function') action.call(this, process);
             }
         }
-        this.completedProcesses.add(process.id);
+        this.processStates.set(process.id, outcome);
         process._running = false;
     },
 
@@ -580,15 +573,24 @@ export default {
     },
 
     /**
+     * The flows whose `group` option is `group` right now. Read from the
+     * options each time, so a flow that changes group moves with it.
+     *
+     * @param {string} group
+     * @returns {string[]}
+     */
+    inGroup(group) {
+        return [...this.flowOptions].filter(([, options]) => options.group === group).map(([flowId]) => flowId);
+    },
+
+    /**
      * Pause all flows in a group.
      * 
      * @param {string} group - Group name.
      * @returns {this}
      */
     pauseGroup(group) {
-        const flowGroup = this.flowGroups.get(group);
-        if (!flowGroup) return this;
-        for (const flowId of flowGroup) {
+        for (const flowId of this.inGroup(group)) {
             this.setFlowOptions({ paused: true }, flowId);
         }
 
@@ -605,9 +607,7 @@ export default {
      * @returns {this}
      */
     runGroup(group) {
-        const flowGroup = this.flowGroups.get(group);
-        if (!flowGroup) return this;
-        for (const flowId of flowGroup) {
+        for (const flowId of this.inGroup(group)) {
             this.runFlow(flowId);
         }
 
@@ -699,13 +699,6 @@ export default {
             this.pendingFlows.add(flowId);
         }
 
-        /**
-         * Grouping flows
-         */
-        if (options.group) {
-            if (!this.flowGroups.has(options.group)) this.flowGroups.set(options.group, new Set());
-            this.flowGroups.get(options.group).add(flowId);
-        }
         
         /**
          * Update options partially with fallbacks to previous state
@@ -749,7 +742,7 @@ export default {
             if (options.depends?.length && onCycle(fid, flowDeps)) circularFlows.push(fid);
         }
         for (const fid of circularFlows) {
-            this.log('CIRC_FLOW_DEP_SKIPPED', fid, this.flowOptions.get(fid).depends);
+            this.error('CIRC_FLOW_DEP_SKIPPED', fid, this.flowOptions.get(fid).depends);
             this.pendingFlows.delete(fid);
             this.skipFlow(fid, 'circular');
         }
@@ -761,7 +754,7 @@ export default {
         const processDeps = (id) => (processes.get(id)?.depends || []).map(dep => this.PREFIX + dep);
         for (const process of processes.values()) {
             if (process.depends?.length && onCycle(process.id, processDeps)) {
-                this.log('CIRC_PROCESS_DEP_SKIPPED', process.id, process.depends);
+                this.error('CIRC_PROCESS_DEP_SKIPPED', process.id, process.depends);
                 process.skipped = true;
                 process.skipReason = 'circular';
             }
@@ -903,17 +896,17 @@ export default {
             const hasProcess = Array.from(this.flows.values()).some(flow =>
                 flow.some(p => p.id === this.PREFIX + depId)
             );
-            return !this.completedProcesses.has(this.PREFIX + depId) && !hasProcess;
+            return !this.processStates.has(this.PREFIX + depId) && !hasProcess;
         });
         if (missingDeps.length) {
-            this.log('DEP_NOT_FOUND', process.id, `${missingDeps.join(', ')}`);
+            this.error('DEP_NOT_FOUND', process.id, `${missingDeps.join(', ')}`);
             process._depsResolved = true;
             process._triggered = true;
             process._waitResolve?.();
             return true;
         }
 
-        if (!process.depends.every(depId => this.completedProcesses.has(this.PREFIX + depId))) return false;
+        if (!process.depends.every(depId => this.processStates.has(this.PREFIX + depId))) return false;
 
         process._depsResolved = true;
 
@@ -922,7 +915,7 @@ export default {
          * without waiting for its trigger.
          */
         if (this.isStrict(process) && process.depends.some(depId =>
-            this.failedProcesses.has(this.PREFIX + depId) || this.skippedProcesses.has(this.PREFIX + depId)
+            this.processStates.get(this.PREFIX + depId) !== 'completed'
         )) {
             process.skipped = true;
             process.skipReason = 'dependency';
@@ -966,7 +959,7 @@ export default {
                 ) {
                     this.pendingFlows.delete(pendingFlowId);
                     this.skipFlow(pendingFlowId, 'dependency');
-                    this.log('FLOW_DEP_SKIPPED', { flow: pendingFlowId, depends: `${pendingOptions.depends.filter(depId => !this.flowOptions.has(this.normalizeFlowId(depId))).join(', ')}` });
+                    this.error('FLOW_DEP_SKIPPED', { flow: pendingFlowId, depends: `${pendingOptions.depends.filter(depId => !this.flowOptions.has(this.normalizeFlowId(depId))).join(', ')}` });
                 }
             }
         }
@@ -1216,7 +1209,7 @@ export default {
                                 await new Promise(res => setTimeout(res, between));
                             }
                             await this.run(process);
-                            if (this.failedProcesses.has(process.id)) broken = true;
+                            if (this.processStates.get(process.id) === 'failed') broken = true;
                             else if (process.skipReason !== 'condition') broken = process.skipReason === 'dependency';
                         });
                     });
@@ -1238,7 +1231,7 @@ export default {
                  * outcome so that strict flows depending on this one skip.
                  */
                 const tainted = processes.some(p =>
-                    this.failedProcesses.has(p.id) || (p.skipped && p.skipReason === 'dependency')
+                    this.processStates.get(p.id) === 'failed' || (p.skipped && p.skipReason === 'dependency')
                 );
                 this.setFlowOptions({ status: this.FLOW_STATE.COMPLETED, outcome: tainted ? 'failed' : 'completed' }, fid);
                 this.callback(options.onComplete, fid);
@@ -1494,7 +1487,7 @@ export default {
         }
         const handler = this.types.get(process.type);
         if (!handler) {
-            this.log('UNKNOWN_TYPE', process.type, process.id);
+            this.error('UNKNOWN_TYPE', process.type, process.id);
             this.settle(process, 'failed', new Error('Unknown type: ' + process.type));
             this.checkPendingProcesses();
             return;

@@ -188,7 +188,7 @@ describe('after a timeout', () => {
         let polls = 0;
         core.registerType('poll', (process) => new Promise(() => {
             (function poll() {
-                if (core.completedProcesses.has(process.id)) return;
+                if (core.processStates.has(process.id)) return;
                 polls++;
                 setTimeout(poll, 50);
             })();

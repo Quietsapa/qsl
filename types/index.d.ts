@@ -357,6 +357,8 @@ export interface QSL {
     yield: boolean;
     /** Reset run state once every flow completes. */
     autoReset: boolean;
+    /** Let the logger print QSL's own progress, not only errors. */
+    debug: boolean;
 
     readonly initialized: boolean;
     /** True while a run is in progress. */
@@ -365,10 +367,8 @@ export interface QSL {
     readonly LIFECYCLE: { DOMREADY: boolean; LOADED: boolean };
 
     readonly flowOptions: Map<string, FlowState>;
-    /** Ids, prefixed, of every settled process: completed, failed or skipped. */
-    readonly completedProcesses: Set<string>;
-    readonly failedProcesses: Set<string>;
-    readonly skippedProcesses: Set<string>;
+    /** How each settled process ended, by prefixed id. Cleared by `reset()`. */
+    readonly processStates: Map<string, Outcome>;
     logger: Logger | null;
 
     init(): Promise<this>;
@@ -383,11 +383,15 @@ export interface QSL {
     runFlow(flowId: string, withTrigger?: boolean): this;
     pauseGroup(group: string): this;
     runGroup(group: string): this;
+    /** The ids of the flows whose `group` option is `group` right now. */
+    inGroup(group: string): string[];
     setLogger(logger: Logger): this;
     setOnAllComplete(callback: () => void): this;
     useEvents(): this;
     reset(): this;
     destroy(): this;
+    /** Check whether the run is done, for a plugin that held its end back through `completedFlowsActions`. */
+    maybeComplete(): void;
 
     /**
      * Plugin hooks. A plugin adds functions to these; each runs with the
@@ -396,10 +400,12 @@ export interface QSL {
     readonly initActions: Set<(this: QSL) => void | Promise<void>>;
     readonly loadActions: Set<(this: QSL) => void>;
     readonly resetActions: Set<(this: QSL) => void>;
-    readonly allCompleteActions: Set<(this: QSL) => void>;
     readonly processCompleteActions: Set<(this: QSL, process: Process) => void>;
+    /** Run once every flow has completed, after `setOnAllComplete()`'s callback. */
+    readonly allCompleteActions: Set<(this: QSL) => void>;
     readonly addProcessFilters: Set<(this: QSL, flowId: string | true | null, config: ProcessConfig) => [string | true | null, ProcessConfig]>;
     readonly flowIdFilters: Set<(this: QSL, flowIds: string[]) => string[]>;
+    /** Decide whether the run is done; return `false` to hold its end back and call `maybeComplete()` later. */
     readonly completedFlowsActions: Set<(this: QSL, done: boolean, flows: Map<string, Process[]>, flowOptions: Map<string, FlowState>) => boolean>;
     readonly handlerCallbacksFilters: Set<(this: QSL, process: Process) => Partial<HandlerCallbacks> | void>;
     /** Return `true` when the condition fails, `false` when it passes, `null` when it is not yours. */

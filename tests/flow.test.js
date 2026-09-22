@@ -486,10 +486,10 @@ describe('add()', () => {
 });
 
 describe('dependencies that point nowhere', () => {
-    it('a missing process dependency is logged and the process runs', async () => {
+    it('a missing process dependency is reported as an error and the process runs', async () => {
         const core = await freshCore();
         const lines = [];
-        core.setLogger({ log: (...a) => lines.push(a), error: () => {} });
+        core.setLogger({ log: () => {}, error: (...a) => lines.push(a) });
         const ran = [];
 
         core.add({ id: 'x', depends: ['nope'], onComplete: () => ran.push('x') });
@@ -527,11 +527,11 @@ describe('dependencies that point nowhere', () => {
 });
 
 describe('unknown type', () => {
-    it('logs it, settles the process as failed and fires QSL:error', async () => {
+    it('reports it as an error, settles the process as failed and fires QSL:error', async () => {
         const core = await freshCore();
         core.useEvents();
         const lines = [];
-        core.setLogger({ log: (...a) => lines.push(a), error: () => {} });
+        core.setLogger({ log: () => {}, error: (...a) => lines.push(a) });
         let error = null;
         const fn = (e) => { error = e.detail.error; };
         window.addEventListener('QSL:error', fn);
@@ -595,13 +595,14 @@ describe('plugin hooks', () => {
         const order = [];
         core.loadActions.add(() => order.push('load'));
         core.processCompleteActions.add((p) => order.push('process:' + p.id));
+        core.setOnAllComplete(() => order.push('onAllComplete'));
         core.allCompleteActions.add(() => order.push('all'));
         core.resetActions.add(() => order.push('reset'));
 
         core.add({ id: 'x' });
         await core.load();
 
-        expect(order).toEqual(['load', 'process:qsl-x', 'all', 'reset']);
+        expect(order).toEqual(['load', 'process:qsl-x', 'onAllComplete', 'all', 'reset']);
     });
 
     it('handlerCallbacksFilters hand extra callbacks to every type handler', async () => {
@@ -641,3 +642,59 @@ describe('combined plugins', () => {
     });
 });
 
+
+describe('processStates', () => {
+    it('records how each process ended, by its prefixed id', async () => {
+        const core = await freshCore();
+        core.autoReset = false;
+        core.registerType('ok', () => {});
+        core.registerType('fail', () => Promise.reject(new Error('x')));
+
+        core.add({ id: 'a', type: 'ok' });
+        core.add({ id: 'b', type: 'fail' });
+        core.add({ id: 'c', type: 'ok', condition: () => false });
+        await core.load();
+
+        expect(Object.fromEntries(core.processStates)).toEqual({ 'qsl-a': 'completed', 'qsl-b': 'failed', 'qsl-c': 'skipped' });
+        core.reset();
+        expect(core.processStates.size).toBe(0);
+    });
+});
+
+describe('groups', () => {
+    it('follow a flow that changes group', async () => {
+        const core = await freshCore();
+        core.setFlowOptions({ group: 'ads', paused: true }, 'f');
+        core.setFlowOptions({ group: 'analytics' }, 'f');
+        expect(core.inGroup('ads')).toEqual([]);
+        expect(core.inGroup('analytics')).toEqual(['f']);
+    });
+});
+
+describe('flow callbacks', () => {
+    it('beforeStart and onComplete run once per flow, around its processes, before the end of the run', async () => {
+        const core = await freshCore();
+        const order = [];
+        core.registerType('mark', (p) => { order.push('process:' + p.id.replace(/^qsl-/, '')); });
+        core.setFlowOptions({ beforeStart: () => order.push('start:a'), onComplete: () => order.push('done:a') }, 'a');
+        core.setFlowOptions({ beforeStart: () => order.push('start:b'), onComplete: () => order.push('done:b'), depends: ['a'] }, 'b');
+        core.add({ id: 'x', type: 'mark' }, 'a');
+        core.add({ id: 'y', type: 'mark' }, 'b');
+        core.setOnAllComplete(() => order.push('all'));
+        await core.load();
+
+        expect(order).toEqual(['start:a', 'process:x', 'done:a', 'start:b', 'process:y', 'done:b', 'all']);
+    });
+
+    it('onComplete runs for a flow whose processes all failed or were skipped', async () => {
+        const core = await freshCore();
+        const done = [];
+        core.registerType('fail', () => Promise.reject(new Error('x')));
+        core.setFlowOptions({ onComplete: () => done.push('f') }, 'f');
+        core.add({ id: 'a', type: 'fail' }, 'f');
+        core.add({ id: 'b', condition: () => false }, 'f');
+        await core.load();
+
+        expect(done).toEqual(['f']);
+    });
+});

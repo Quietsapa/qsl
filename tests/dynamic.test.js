@@ -204,7 +204,7 @@ describe('processes added while a run is in progress', () => {
         /**
          * pauseGroup and runGroup reach the late flows too.
          */
-        expect(core.flowGroups.get('marketing').size).toBe(3);
+        expect(core.inGroup('marketing').length).toBe(3);
 
         /**
          * The same condition decides for the late flows, checked when they run.

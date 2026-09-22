@@ -58,7 +58,7 @@ describe('README and types agree', () => {
         const start = readme.indexOf('### Other methods');
         const list = readme.slice(start, readme.indexOf('\n## ', start));
         const documented = [...list.matchAll(/^- `(\w+)` —/gm)].map((m) => m[1]);
-        for (const setting of ['autoReset', 'strict', 'timeout', 'retries', 'retryDelay', 'yield']) {
+        for (const setting of ['autoReset', 'debug', 'strict', 'timeout', 'retries', 'retryDelay', 'yield']) {
             expect(documented, setting).toContain(setting);
             expect(fields('QSL'), setting).toContain(setting);
         }
