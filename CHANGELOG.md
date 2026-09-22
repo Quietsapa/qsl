@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-22
+
+No change to the runtime: `src/` is the same as in 0.3.0. This release is
+about testing QSL in more than one browser.
+
+### Development
+
+- `npm run test:e2e` can drive Firefox and WebKit, Safari's engine, as well
+  as Chromium: `E2E_BROWSER=firefox` or `E2E_BROWSER=webkit`, after
+  `npx playwright install firefox webkit`.
+- Unit tests for the stack-trace attribution in the `events` plugin as each
+  engine formats a stack: V8, SpiderMonkey and JavaScriptCore.
+- CI runs the examples in Chromium, Firefox and WebKit, and the unit tests a
+  second time with `scheduler.yield()` in place.
+
+### Documentation
+
+- The README no longer says that a module script's `load` event always comes
+  before its top-level `await` is done: that is how Chromium behaves, not
+  every browser.
+
 ## [0.3.0] - 2026-09-22
 
 ### Added
@@ -457,7 +478,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Quietsapa/qsl/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Quietsapa/qsl/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Quietsapa/qsl/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Quietsapa/qsl/compare/v0.1.5...v0.2.0

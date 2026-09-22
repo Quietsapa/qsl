@@ -308,8 +308,8 @@ failed. A rejection settles the process as failed. Calling `onComplete` and
 
 **Modules.** `module: true` makes a `<script type="module">`, and the browser
 runs it as it runs any module; QSL adds nothing. For `script` the process
-completes on the browser's `load` event, which a module fires once it has
-started, before a top-level `await` is done, and even if it throws. An
+completes on the browser's `load` event, which a module fires even if it
+throws, and in Chromium before a top-level `await` is done. An
 `inline-script` module completes as soon as it is inserted: the browser runs
 it later and reports nothing when it has. When something has to wait for a
 module to finish, have the module say so — dispatch an event, or set a global
@@ -469,6 +469,7 @@ npm run test:scheduler  # the same suite with scheduler.yield() present
 npm run build           # three bundles into dist/
 npm run check:size      # gzip budgets for the browser bundles
 npm run test:e2e        # every example in headless Chromium, against dist/
+E2E_BROWSER=firefox npm run test:e2e   # or webkit, Safari's engine
 ```
 
 `npm run check:version` guards against `VERSION` in `src/core.js` drifting away

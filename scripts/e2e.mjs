@@ -11,9 +11,16 @@
  * the CDN; the server rewrites that to the local dist/.
  *
  * Usage: npm run build && npm run test:e2e
+ *
+ * Chromium by default. E2E_BROWSER picks another engine:
+ *
+ *   E2E_BROWSER=firefox npm run test:e2e
+ *   E2E_BROWSER=webkit npm run test:e2e     (Safari's engine)
+ *
+ * Each needs its Playwright build: `npx playwright install firefox webkit`.
  */
 
-import { chromium } from 'playwright';
+import { chromium, firefox, webkit } from 'playwright';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -47,15 +54,31 @@ const server = createServer(async (req, res) => {
 }).listen(0);
 
 const base = `http://127.0.0.1:${server.address().port}/examples/`;
+const engines = { chromium, firefox, webkit };
+const engine = process.env.E2E_BROWSER || 'chromium';
+if (!engines[engine]) {
+    console.error(`e2e: unknown E2E_BROWSER "${engine}" — use chromium, firefox or webkit.`);
+    process.exit(1);
+}
+
 /**
- * Which Chromium to drive. CI uses Playwright's own download
- * (`npx playwright install chromium`). Without it — on an older macOS, say —
- * the installed Google Chrome is used. Either can be forced:
+ * Which browser to drive. CI uses Playwright's own downloads
+ * (`npx playwright install`). For Chromium, without one — on an older macOS,
+ * say — the installed Google Chrome is used. Either can be forced:
  *
  *   E2E_CHANNEL=chrome npm run test:e2e
  *   CHROMIUM_PATH=/path/to/chrome npm run test:e2e
  */
 async function launch() {
+    if (engine !== 'chromium') {
+        try {
+            return await engines[engine].launch();
+        } catch (e) {
+            if (!String(e.message).includes("Executable doesn't exist")) throw e;
+            console.error(`e2e: Playwright's ${engine} is not installed — run \`npx playwright install ${engine}\`.`);
+            process.exit(1);
+        }
+    }
     if (process.env.E2E_CHANNEL || process.env.CHROMIUM_PATH) {
         return chromium.launch({
             channel: process.env.E2E_CHANNEL || undefined,
@@ -75,6 +98,7 @@ async function launch() {
 }
 
 const browser = await launch();
+console.log(`e2e: ${engine} ${browser.version()}\n`);
 let failures = 0;
 
 /**
@@ -324,12 +348,18 @@ await scenario('modules: plain module scripts, as the browser runs them', '../sc
         if (r.outcomes[id] !== 'completed') throw new Error(`${id}: ${r.outcomes[id]}`);
     }
     if (JSON.stringify(r.values) !== '["dep","c","shared","shared"]') throw new Error('values ' + JSON.stringify(r.values));
-    if (r.atDone.awaited || r.atDone.externalAwaited) throw new Error('waited for a module: ' + JSON.stringify(r.atDone));
+    /**
+     * QSL does not wait for an inline module, in any browser. When a module
+     * script's load event fires relative to its top-level await is up to the
+     * browser; it is reported, not asserted.
+     */
+    if (r.atDone.awaited) throw new Error('waited for an inline module');
+    console.log(`      (${engine}: a module script's load came ${r.atDone.externalAwaited ? 'after' : 'before'} its top-level await finished)`);
     if (r.modules !== 7) throw new Error('module scripts: ' + r.modules);
 }, {}, true, [/in dependency/]);
 
 await browser.close();
 server.close();
 
-console.log(failures ? `\n${failures} scenario(s) failed` : '\nAll scenarios passed');
+console.log(failures ? `\n${failures} scenario(s) failed in ${engine}` : `\nAll scenarios passed in ${engine}`);
 process.exit(failures ? 1 : 0);

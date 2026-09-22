@@ -429,6 +429,57 @@ describe('events plugin', () => {
     });
 
     /**
+     * Each engine formats Error().stack its own way: V8 opens with an
+     * "Error" line and writes "at fn (url:line:col)"; SpiderMonkey and
+     * JavaScriptCore write "fn@url:line:col" with no header, and
+     * JavaScriptCore names top-level code "global code" or "module code".
+     * The first two frames are QSL's own (the patched addEventListener and
+     * the lookup); the vendor's is the one after them.
+     */
+    const QSL_FRAME = 'https://cdn.jsdelivr.net/npm/@quietsapa/qsl/dist/qsl.min.js';
+    it.each([
+        ['V8 (Chrome, Edge)', `Error\n    at d (${QSL_FRAME}:1:900)\n    at HTMLDocument.addEventListener (${QSL_FRAME}:1:1200)\n    at init (https://cdn.example/v2/widget.js?build=7:14:3)\n    at https://cdn.example/v2/widget.js?build=7:20:1`],
+        ['V8, anonymous top level', `Error\n    at d (${QSL_FRAME}:1:900)\n    at HTMLDocument.addEventListener (${QSL_FRAME}:1:1200)\n    at https://cdn.example/v2/widget.js:20:1`],
+        ['SpiderMonkey (Firefox)', `d@${QSL_FRAME}:1:900\naddEventListener@${QSL_FRAME}:1:1200\ninit@https://cdn.example/v2/widget.js?build=7:14:3\n@https://cdn.example/v2/widget.js?build=7:20:1\n`],
+        ['JavaScriptCore (Safari)', `d@${QSL_FRAME}:1:900\naddEventListener@${QSL_FRAME}:1:1200\ninit@https://cdn.example/v2/widget.js?build=7:14:3\nglobal code@https://cdn.example/v2/widget.js?build=7:20:1`],
+        ['JavaScriptCore, module code', `d@${QSL_FRAME}:1:900\naddEventListener@${QSL_FRAME}:1:1200\nmodule code@https://cdn.example/v2/widget.js:20:1`],
+        ['a file no process loaded', `d@${QSL_FRAME}:1:900\naddEventListener@${QSL_FRAME}:1:1200\nglobal code@https://cdn.example/v2/unknown.js:20:1`, false],
+    ])('by stack, as %s formats it', async (_, stack, attributed = true) => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const hits = [];
+
+        core.registerType('script', (process) => {
+            if (process.id !== 'qsl-widget') return Promise.resolve();
+            const RealError = globalThis.Error;
+            /**
+             * A constructor that returns an object hands `new Error()` that
+             * object. (A subclass would not do: V8 sets `stack` as an own
+             * property of every error, over any getter.)
+             */
+            globalThis.Error = function () { return { stack }; };
+            try {
+                document.addEventListener('DOMContentLoaded', () => hits.push('widget'));
+            } finally {
+                globalThis.Error = RealError;
+            }
+            return Promise.resolve();
+        });
+
+        /**
+         * `other` has events off: a listener attributed to it would be left
+         * to the browser, and DOMContentLoaded is long gone. Only a listener
+         * attributed to `widget` ever runs.
+         */
+        core.add({ id: 'other', type: 'script', src: 'https://cdn.example/v2/other.js', fireEvents: false });
+        core.add({ id: 'widget', type: 'script', src: 'https://cdn.example/v2/widget.js?build=7' });
+        await core.load();
+
+        expect(hits).toEqual(attributed ? ['widget'] : []);
+    });
+
+    /**
      * The stack-trace fallback compares the file a listener was registered
      * from with the `src` of each script process. It is a heuristic over URLs
      * and paths, so it gets a table.
