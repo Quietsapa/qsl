@@ -98,8 +98,8 @@ after those events have passed.
 | Build | Entry | Size (gzip) | Contents |
 | --- | --- | --- | --- |
 | `dist/qsl.mjs` | `src/index.js` | — | ESM, nothing registered, nothing started |
-| `dist/qsl.min.js` | `src/presets/full.js` | ~9.1 kB | All types, conditions, triggers, and the logger and events plugins |
-| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~5.8 kB | The `script` and `inline-script` types only |
+| `dist/qsl.min.js` | `src/presets/full.js` | ~9.3 kB | All types, conditions, triggers, and the logger and events plugins |
+| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~6.0 kB | The `script` and `inline-script` types only |
 
 ## Quick start
 
@@ -313,7 +313,7 @@ failed. A rejection settles the process as failed. Calling `onComplete` and
 | `inline-script` | `code`, `module` |
 | `stylesheet` | `href`, `crossOrigin`, `fetchPriority`, `bypassCache` |
 | `style` | `code` |
-| `pixel` | `src`, `dom`, `style`, `fetchPriority` |
+| `pixel` | `src`, `dom`, `style`, `fetchPriority`, `bypassCache` |
 | `html` | `tag`, `html`, `id`, `className`, `style` |
 | `shadow` | `tag`, `shadowData: { container, position, hidden }` |
 | `console` | `message` — built in, used as the default type |
@@ -335,8 +335,9 @@ own images and scripts. A flow with `preload` passes it on to the
 
 Common fields across types: `id`, `type`, `depends`, `condition`, `trigger`,
 `priority`, `delay`, `strict`, `timeout`, `retries`, `retryDelay`, `data` (rendered as `data-*`
-attributes), `footer` (append to `<body>` instead of `<head>`), and the
-callbacks `onBeforeStart`, `onComplete`, `onError`.
+attributes), `footer` (append to `<body>` instead of `<head>`), `fireEvents`
+(`false` keeps the events plugin away from this process), and the callbacks
+`onBeforeStart`, `onComplete`, `onError`.
 
 Writing your own is a function returning a promise:
 
@@ -445,6 +446,43 @@ element's `error` event for the built-in types, or an `Error` named
 `detail.reason` says why: `'condition'`, `'dependency'` (a `strict` process or
 flow whose dependency failed or was skipped) or `'circular'`.
 
+## TypeScript
+
+Type declarations ship with the package; there is nothing to install. The
+runtime stays plain JavaScript, and the declarations are checked against it in
+CI.
+
+`add()` takes a union keyed by `type`, so each type's fields are checked:
+a `script` needs its `src`, `href` belongs to stylesheets, and a misspelt
+field is an error. Triggers and conditions are checked by form —
+`'visible:#reviews'` and `'ua:device:mobile'` pass, `'visibel:#reviews'` and
+`'ua:device:watch'` do not. The `QSL:*` events are typed on `window`, and so is
+`window.__QSL__` for pages that load the browser bundle.
+
+A custom type, trigger or condition makes itself known by extending an
+interface:
+
+```ts
+import qsl from '@quietsapa/qsl';
+
+declare module '@quietsapa/qsl' {
+    interface CustomTypes {
+        iframe: { srcdoc: string; container: string };
+    }
+    interface CustomTriggers {
+        [form: `scroll:${number}`]: true;
+    }
+    interface CustomConditions {
+        'network:fast': true;
+    }
+}
+
+qsl.add({ type: 'iframe', srcdoc: '<p>Map</p>', container: '#map', trigger: 'scroll:60', condition: 'network:fast' });
+```
+
+The declarations work with TypeScript 5.x and later, and are tested with 6.0
+and 7.0.
+
 ## Examples
 
 Runnable pages in [`examples/`](examples/), also live at
@@ -478,6 +516,7 @@ npm install
 npm test                # vitest + happy-dom
 npm run test:coverage   # the same, with the coverage floors CI enforces
 npm run test:scheduler  # the same suite with scheduler.yield() present
+npm run test:types      # the type declarations, with tsc
 npm run build           # three bundles into dist/
 npm run check:size      # gzip budgets for the browser bundles
 npm run test:e2e        # every example in headless Chromium, against dist/

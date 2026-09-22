@@ -41,6 +41,13 @@ jobs:
       - name: Run tests with scheduler.yield()
         run: npm run test:scheduler
 
+      - name: Check type declarations (TypeScript 6)
+        run: npm run test:types
+
+      - name: Check type declarations (TypeScript 7)
+        if: matrix.node == '22'
+        run: npx -y -p typescript@7 tsc -p tests/types
+
       - name: Build bundles
         run: npm run build
 

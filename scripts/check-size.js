@@ -18,10 +18,24 @@ const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..'
 
 const budgets = {
     'dist/qsl.min.js': 10,
-    'dist/qsl.slim.min.js': 6,
+    'dist/qsl.slim.min.js': 6.5,
 };
 
+const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const header = `/*! QSL v${version} |`;
+
 let failed = false;
+
+/**
+ * Every bundle opens with its licence header, for this version.
+ */
+for (const file of ['dist/qsl.mjs', ...Object.keys(budgets)]) {
+    const full = path.join(root, file);
+    if (fs.existsSync(full) && !fs.readFileSync(full, 'utf8').startsWith(header)) {
+        console.error(`check-size: ${file} does not start with \`${header}\` — the licence header is missing or stale.`);
+        failed = true;
+    }
+}
 
 for (const [file, budget] of Object.entries(budgets)) {
     const full = path.join(root, file);

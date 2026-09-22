@@ -6,6 +6,46 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-22
+
+TypeScript declarations, and a licence header in every bundle.
+
+### Added
+
+- **TypeScript declarations**, shipped with the package in `types/`. The
+  runtime stays plain JavaScript. `add()` takes a union keyed by `type`, so a
+  `script` without `src` or a misspelt field is an error; triggers and
+  conditions are checked by form (`'visible:#reviews'` passes,
+  `'visibel:#reviews'` does not); the `QSL:*` events are typed on `window`,
+  and so are `window.__QSL__` and `QSLReady` for the browser bundles. Custom
+  types, triggers and conditions extend `CustomTypes`, `CustomTriggers` and
+  `CustomConditions`. Works with TypeScript 5.0 and later, tested with 5.x,
+  6.0 and 7.0.
+
+### Changed
+
+- Every bundle opens with a one-line licence header —
+  `/*! QSL v… | (c) 2026 Sergey Timofeev (Quietsapa) | Apache-2.0 | github.com/Quietsapa/qsl */` —
+  which minifiers keep, so a copy of QSL on any page says what it is, which
+  version, and under what licence. `npm run check:size` fails a bundle without
+  it. `NOTICE` and the `author` field in `package.json` name the copyright
+  holder.
+- The size budget of the slim bundle is 6.5 kB, up from 6 kB: the header
+  takes about 80 bytes of it, and the slim bundle now carries `inline-script`
+  too. The full bundle keeps its 10 kB.
+
+### Development
+
+- `npm run test:types` checks the declarations with tsc against what should
+  and should not compile, and runs before publishing. Tests also hold
+  README.md and the declarations to the same fields, options and methods, and
+  the declared exports to the real ones.
+
+### Documentation
+
+- README: a TypeScript section; `bypassCache` for `pixel` and `fireEvents`
+  among the fields every process has, both of which the README had left out.
+
 ## [0.3.2] - 2026-09-22
 
 ### Added
@@ -495,7 +535,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Quietsapa/qsl/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/Quietsapa/qsl/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Quietsapa/qsl/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Quietsapa/qsl/compare/v0.2.1...v0.3.0

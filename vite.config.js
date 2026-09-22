@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import path from 'node:path';
 import url from 'node:url';
+import { readFileSync } from 'node:fs';
 
 const root = path.dirname(url.fileURLToPath(import.meta.url));
 const resolve = (p) => path.resolve(root, p);
@@ -41,6 +42,16 @@ const targets = {
     },
 };
 
+/**
+ * The licence header every bundle keeps. `/*!` is the convention minifiers,
+ * ours and anyone else's, leave in place.
+ */
+const pkg = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
+const year = new Date().getFullYear();
+const years = year > 2026 ? `2026-${year}` : '2026';
+const holder = pkg.author.replace(/\s*<[^>]*>/, '');
+const banner = `/*! QSL v${pkg.version} | (c) ${years} ${holder} | ${pkg.license} | github.com/Quietsapa/qsl */`;
+
 export default defineConfig(({ mode }) => {
     const target = targets[mode] || targets.esm;
 
@@ -57,8 +68,11 @@ export default defineConfig(({ mode }) => {
                 fileName: target.fileName,
                 name: 'QSL',
             },
+            rollupOptions: {
+                output: { banner },
+            },
             terserOptions: {
-                format: { comments: false },
+                format: { comments: false, preamble: banner },
             },
         },
     };

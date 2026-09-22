@@ -57,6 +57,17 @@ describe('slim preset', () => {
 });
 
 describe('ESM entry', () => {
+    it('exports exactly what types/index.d.ts declares', async () => {
+        const { readFileSync } = await import('node:fs');
+        const { resolve } = await import('node:path');
+        const dts = readFileSync(resolve(process.cwd(), 'types/index.d.ts'), 'utf8');
+        const declared = [...dts.matchAll(/^export declare const (\w+)/gm)].map((m) => m[1]);
+        declared.push('core', 'default');
+
+        const mod = await import('../src/index.js');
+        expect(Object.keys(mod).sort()).toEqual(declared.sort());
+    });
+
     it('registers and starts nothing on import', async () => {
         vi.resetModules();
         const mod = await import('../src/index.js');
