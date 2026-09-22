@@ -47,9 +47,9 @@ describe('full preset', () => {
 });
 
 describe('slim preset', () => {
-    it('registers the script type only, and no triggers or conditions', async () => {
+    it('registers the script and inline-script types only, and no triggers or conditions', async () => {
         const qsl = await loadPreset('default');
-        expect([...qsl.types.keys()].sort()).toEqual(['console', 'script']);
+        expect([...qsl.types.keys()].sort()).toEqual(['console', 'inline-script', 'script']);
         expect(qsl.triggerHandlers.size).toBe(0);
         expect(qsl.conditionHandlers.size).toBe(0);
         expect(qsl.initialized).toBe(true);

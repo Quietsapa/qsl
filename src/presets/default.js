@@ -1,7 +1,7 @@
 import core from '../core.js';
 
-import { Script } from '../types.js';
+import { Script, InlineScript } from '../types.js';
 
 core
-    .registerTypes([Script])
+    .registerTypes([Script, InlineScript])
     .init();

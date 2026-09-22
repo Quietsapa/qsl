@@ -46,7 +46,7 @@ Or load a prebuilt bundle straight from a CDN:
 <!-- everything: all types, conditions, triggers, logging -->
 <script src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl/dist/qsl.min.js"></script>
 
-<!-- just ordered script loading -->
+<!-- just scripts: files and inline snippets, in order -->
 <script src="https://cdn.jsdelivr.net/npm/@quietsapa/qsl/dist/qsl.slim.min.js"></script>
 ```
 
@@ -98,8 +98,8 @@ after those events have passed.
 | Build | Entry | Size (gzip) | Contents |
 | --- | --- | --- | --- |
 | `dist/qsl.mjs` | `src/index.js` | — | ESM, nothing registered, nothing started |
-| `dist/qsl.min.js` | `src/presets/full.js` | ~9.3 kB | All types, conditions, triggers, and the logger and events plugins |
-| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~5.4 kB | The `script` type only |
+| `dist/qsl.min.js` | `src/presets/full.js` | ~9.1 kB | All types, conditions, triggers, and the logger and events plugins |
+| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~5.8 kB | The `script` and `inline-script` types only |
 
 ## Quick start
 

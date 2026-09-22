@@ -8,8 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.3.1] - 2026-09-22
 
-No change to the runtime: `src/` is the same as in 0.3.0. This release is
-about testing QSL in more than one browser.
+Testing in more than one browser, and inline snippets in the slim bundle. The
+core and the full bundle are the same as in 0.3.0.
+
+### Changed
+
+- The slim bundle registers `inline-script` as well as `script`, so it can
+  run the inline snippets vendors hand out next to their script tags. It grows
+  by under 0.1 kB.
 
 ### Development
 

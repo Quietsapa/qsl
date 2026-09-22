@@ -12,8 +12,8 @@ const resolve = (p) => path.resolve(root, p);
  *                started on import. This is what `import '@quietsapa/qsl'` resolves to.
  *   browser      batteries-included IIFE for a <script> tag or a CDN. Registers
  *                every type, condition and trigger, then calls init().
- *   browser-slim same, but only the `script` type. Use it when the page just
- *                needs ordered script loading.
+ *   browser-slim same, but only the `script` and `inline-script` types. Use
+ *                it when the page just needs scripts, files and snippets, in order.
  *
  * Run all three with `npm run build`.
  */
