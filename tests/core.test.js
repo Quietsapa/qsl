@@ -81,7 +81,6 @@ describe('reset and destroy', () => {
         const core = await freshCore();
         expect(core.EVENTS.SKIPPED).toBeTruthy();
 
-        core.useEvents();
         const reasons = [];
         const fn = (e) => reasons.push([e.detail.id, e.detail.reason]);
         window.addEventListener(core.EVENTS.SKIPPED, fn);

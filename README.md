@@ -98,8 +98,8 @@ after those events have passed.
 | Build | Entry | Size (gzip) | Contents |
 | --- | --- | --- | --- |
 | `dist/qsl.mjs` | `src/index.js` | — | ESM, nothing registered, nothing started |
-| `dist/qsl.min.js` | `src/presets/full.js` | ~9.3 kB | All types, conditions, triggers, and the logger and events plugins |
-| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~6.0 kB | The `script` and `inline-script` types only |
+| `dist/qsl.min.js` | `src/presets/full.js` | ~10.6 kB | All types, conditions, triggers, and the logger and events plugins |
+| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~7.1 kB | The `script` and `inline-script` types only |
 
 ## Quick start
 
@@ -146,17 +146,24 @@ flow, and `ordered` is a ready-made sequential flow. `core.add(config, true)`
 is shorthand for the latter.
 
 **Trigger** — when a flow or process is allowed to start. Until the trigger
-fires, it waits.
+fires, it waits. A process's trigger is armed when its turn comes: when its
+flow starts, or, in an ordered flow, when the one before it is done.
 
 **Condition** — whether it should run at all. A failing condition skips it.
-A process checks its condition when it starts and again right before it runs,
-after its trigger and dependencies, so a long wait cannot run it in a context
-that no longer applies.
+A process checks its condition when its turn comes and again right before it
+runs — after its trigger, its dependencies and its `delay`, just before
+`onBeforeStart` — so a long wait cannot run it in a context that no longer
+applies. A flow checks its condition when it would start: at `load()`, or,
+for a paused flow or one waiting for other flows, when it is released; again
+once its trigger fires, and again after its `delay`.
 
 **Dependency** — `depends` makes a process or flow wait for others to finish.
-Dependencies are looked up by id among the processes and flows that actually
-exist. One that does not is logged, and the rest are still waited for; a
-`strict` process counts it as skipped and is skipped too.
+It takes a list of ids, or a single id. Dependencies are looked up by id among
+the processes and flows that actually exist, when they are needed. One that
+does not exist is logged (`DEP_NOT_FOUND`), and the rest are still waited for;
+a `strict` process or flow counts it as skipped and is skipped too. Two
+processes of one run sharing an id are logged too (`DUPLICATE_ID`): whatever
+depends on that id goes ahead when the first of them settles.
 
 Circular waiting is broken rather than deadlocking. QSL sees every kind of
 waiting as one graph: `depends` between processes, the order of an ordered
@@ -173,8 +180,11 @@ settles by the usual rules.
 follows its own options like any flow, and the run completes when it does. A
 process added with no flow gets a late flow of its own. A process added to a
 flow that has already started gets one too, carrying over that flow's
-`condition`, `strict`, `fireEvents` and `group`: a started flow runs from the
-list it had when it started.
+`condition`, `strict`, `timeout`, `retries`, `retryDelay`, `fireEvents` and
+`group`: a started flow — one in its `delay` included — runs from the list it
+had when it started. A process added after the run has completed with
+`autoReset` off waits for the next run: `reset()` puts it there, and
+`load()` starts it.
 
 **Outcome** — every process settles exactly once: completed, failed or
 skipped. All three release whatever depends on it. By default a dependent then
@@ -188,21 +198,26 @@ had a failure inside it.
 `strict` whether it runs at all. In a strict ordered flow each process counts
 as depending on the one before it, so after a failure (a timeout included) the
 rest of the chain is skipped with `reason: 'dependency'` instead of running
-without it. A process skipped by its own `condition` does not break the chain;
-it is a deliberate step. `strict: false` on one process lets it run after a
-failure, and the chain carries on from there.
+without it; so is the rest after a process skipped for any other reason than
+its own condition, a cycle included. A process skipped by its own `condition`
+does not break the chain; it is a deliberate step, and one whose own condition
+fails in a broken chain is skipped with `reason: 'condition'`. `strict: false`
+on one process lets it run after a failure, and the chain carries on from
+there.
 
 ```js
 core.setFlowOptions({ ordered: true, strict: true }, 'setup');
 ```
 
 **Timeout** — `timeout` is how many milliseconds a process may take once it
-starts loading; waiting for its trigger or its dependencies does not count.
-When it runs out, the process fails with a `TimeoutError`, exactly like a load
-error: `onError` is called, `QSL:error` fires and `strict` dependents skip.
-Like `strict` it can be set on a process, on a flow or for the whole instance,
-and `0` turns it off. A request cannot be cancelled: a script that arrives
-after its deadline still runs, but QSL has already moved on without it.
+starts loading; waiting for its trigger, its dependencies, its `delay` and its
+`onBeforeStart` does not count. When it runs out, the process fails with a
+`TimeoutError`, exactly like a load error: `onError` is called, `QSL:error`
+fires and `strict` dependents skip. Like `strict` it can be set on a process,
+on a flow or for the whole instance, and `0` turns it off. A request cannot be
+cancelled: a script that arrives after its deadline still runs, but QSL has
+already moved on without it, and the handler's own `onComplete` or `onError`
+coming late is dropped.
 
 **Retries** — `retries` is how many more times a load that failed is
 attempted before the process fails, `0` by default. `onError` and `QSL:error`
@@ -225,8 +240,7 @@ core.add({ id: 'sdk', type: 'script', src: 'https://cdn.example/sdk.js', retries
 
 ### `init()`
 
-Registers internal listeners and runs `initActions` from plugins. Returns a
-promise resolving to the instance. Safe to call more than once.
+Registers internal listeners. Returns a promise resolving to the instance. Safe to call more than once.
 
 If the script element that loaded QSL has `?async=true` in its URL, `init()`
 also calls `window.QSLReady()` when it finishes, or a different global named by
@@ -244,26 +258,34 @@ you passed.
 ### `load(options = {})`
 
 Starts everything. Returns a promise that resolves once every flow has
-completed. `options.between` sets a default delay in milliseconds between
-consecutive processes.
+completed. `options.between` sets the delay in milliseconds between
+consecutive processes for this run, for flows that set none of their own; it
+takes the place of `qsl.between`.
 
-Calling `load()` a second time while a run is in progress does nothing.
+Calling `load()` again while a run is in progress starts nothing and returns
+a promise that resolves with that run. A run with nothing in it completes at
+once, the usual way: `ALL_COMPLETED`, `onAllComplete` and the rest.
 
 ### `setFlowOptions(options, flowId = null)`
 
 Sets options on a flow, creating it if needed. Merges with previous options.
+A flow id is a string (a number is taken as its string). `depends` set on a
+flow that has already started changes nothing about it; an empty list stops a
+flow waiting.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `ordered` | `false` | Run processes sequentially |
-| `delay` | `0` | Milliseconds to wait before the flow starts |
-| `between` | `null` | Milliseconds between consecutive processes |
+| `delay` | `0` | Milliseconds to wait before the flow starts; `onBeforeStart` and `FLOW_STARTED` come after it |
+| `between` | `null` | Milliseconds between consecutive processes: in an ordered flow after each one ends, otherwise the n-th starts `between` × n after the first. A skipped process keeps its place. Not set: `load({ between })`, else `qsl.between` |
 | `priority` | `0` | Higher runs earlier; flows with a trigger always go last |
 | `trigger` | `null` | See [Triggers](#triggers) |
 | `condition` | `null` | See [Conditions](#conditions) |
-| `depends` | `[]` | Flow ids to wait for |
+| `depends` | `[]` | Flow ids to wait for (or one id) |
 | `group` | `null` | Group name for `pauseGroup` / `runGroup` |
 | `paused` | `false` | Hold the flow until `runFlow()` or `runGroup()` |
+| `onBeforeStart` | `null` | Called when the flow starts, after `delay`; not waited for |
+| `onComplete` / `onError` | `null` | Called once the flow has ended: `onError` when a process of it failed or was skipped because of a dependency, `onComplete` otherwise. A skipped flow gets neither |
 | `strict` | — | Skip when a dependency failed or was skipped. Not set: inherits `qsl.strict` |
 | `timeout` | — | Default `timeout` for the flow's processes, in ms. Not set: inherits `qsl.timeout` |
 | `retries` | — | Default `retries` for the flow's processes. Not set: inherits `qsl.retries` |
@@ -276,27 +298,44 @@ Sets options on a flow, creating it if needed. Merges with previous options.
 - `use(plugin, ...args)` — run a plugin function against the instance.
 - `registerType(type, handler)` / `registerTypes(list)` — add resource types.
   `registerTypes` accepts `[{ type, handler }]` or `{ type: handler }`.
-- `runFlow(flowId, withTrigger = false)` — start a paused flow.
+- `runFlow(flowId, withTrigger = false)` — start a paused flow. It still
+  waits for its trigger, unless `withTrigger` is `true`, which means the
+  trigger counts as fired. Before `load()` it only lifts the pause, and the
+  flow starts with the others.
 - `pauseGroup(name)` / `runGroup(name)` — act on every flow in a group.
   `pauseGroup` pauses anything in the group that has not started yet,
-  including a flow already waiting for its trigger or its dependencies;
+  including a flow already waiting for its trigger, its dependencies or the
+  end of its `delay` (it goes back to waiting, and its delay starts over when
+  it is released);
   `runGroup` releases it, and a flow whose trigger fired during the pause
   waits for that trigger afresh. A flow belongs to the group its `group`
   option names at that moment; `inGroup(name)` lists them.
 - `processStates` — a `Map` of how each settled process ended, by prefixed id:
   `'completed'`, `'failed'` or `'skipped'`. Cleared by `reset()`.
+- `flows` — a `Map` of the run's flows by id. Each record holds its
+  `processes`, its `options`, its `phase` (`'ready'`, `'armed'` while it waits
+  for its trigger, `'delay'`, `'running'`, `'done'`), its `outcome` once done,
+  and `late` for a flow created after the run started. Cleared by `reset()`.
 - `setLogger(logger)` — supply an object with `log()` and `error()`.
 - `listeners` — a `Set` of functions that get everything QSL reports as it
   happens (see Listening below).
-- `setOnAllComplete(fn)` — callback for the end of a run.
-- `useEvents()` — enable DOM lifecycle events.
+- `setOnAllComplete(fn)` — callback for the end of every run, until
+  `destroy()`. With `autoReset` (the default) the run is cleared just before
+  the `ALL_COMPLETED` signal and this callback, so what they do — `add()`,
+  `setFlowOptions()`, `pauseGroup()`, `load()` again — belongs to the next
+  run. How each process of the finished run ended comes with the signal.
 - `reset()` — clear run state. Registered types and plugin handlers survive, so
-  a later `add()` and `load()` behave the same as the first run.
+  a later `add()` and `load()` behave the same as the first run. Called during
+  a run, it lets that run's `load()` resolve, and whatever the run still had
+  in flight is ignored from then on.
 - `destroy()` — clear everything, including types and plugins. `init()` must be
   called again afterwards.
 - `autoReset` — set to `false` to keep flow state after a run, for debugging.
 - `strict` — instance default for `strict` (see Outcome above). `false` unless
   you set it.
+- `between` — instance default for a flow's `between`, in ms: every flow that
+  sets none of its own uses it, unless `load({ between })` gives one for the
+  run. `0` unless you set it.
 - `timeout` — instance default for `timeout` (see Timeout above). No limit
   unless you set it.
 - `retries` — instance default for `retries` (see Retries above). `0` unless
@@ -323,7 +362,13 @@ Sets options on a flow, creating it if needed. Merges with previous options.
 Every type is a `{ type, handler }` pair. Handlers receive the process config
 and return a promise: resolve when the resource is ready, reject when it
 failed. A rejection settles the process as failed. Calling `onComplete` and
-`onError` is the handler's job, as the built-in types do.
+`onError` is the handler's job, as the built-in types do; QSL calls `onError`
+itself only when it gives up on a process: a timeout, an unknown type, an
+`onBeforeStart` that throws.
+
+The process's `delay` and `onBeforeStart` are QSL's, for every type: once,
+before the first attempt, outside the `timeout`. `onBeforeStart` is awaited;
+one that throws or rejects fails the process.
 
 | Type | Key fields |
 | --- | --- |
@@ -332,9 +377,9 @@ failed. A rejection settles the process as failed. Calling `onComplete` and
 | `stylesheet` | `href`, `crossOrigin`, `fetchPriority`, `bypassCache` |
 | `style` | `code` |
 | `pixel` | `src`, `dom`, `style`, `fetchPriority`, `bypassCache` |
-| `html` | `tag`, `html`, `id`, `className`, `style` |
-| `shadow` | `tag`, `shadowData: { container, position, hidden }` |
-| `console` | `message` — built in, used as the default type |
+| `html` | `tag` (required), `html`, `className`, `style`; the element's id is the process id with its qsl- prefix |
+| `shadow` | `tag` (required), `shadowData: { container, position, hidden }` |
+| `console` | `message`, reported as the MESSAGE signal — built in, used as the default type |
 
 **Modules.** `module: true` makes a `<script type="module">`, and the browser
 runs it as it runs any module; QSL adds nothing. For `script` the process
@@ -391,14 +436,20 @@ Set `trigger` on a process or a flow.
 | a function | You call the callback it receives |
 
 Selectors and queries may contain colons; they are parsed by prefix length, not
-by splitting.
+by splitting. `media:` with no query, or where there is no `matchMedia`, fires
+at once.
 
-Combine them with an array (all must fire) or an operator object:
+Combine them with an array (all must fire, each counted once however often it
+fires) or an operator object:
 
 ```js
 { trigger: ['domready', 'delay:1000'] }
 { trigger: { operator: 'or', triggers: ['idle', 'interaction'] } }
 ```
+
+A trigger nothing knows (a typo, or a plugin's form without the plugin, as in
+the slim bundle) is reported as `UNKNOWN_TRIGGER` and holds nothing back. A
+trigger that throws is reported as `TRIGGER_FAILED` and counts as fired.
 
 ## Conditions
 
@@ -411,7 +462,7 @@ Set `condition` on a process or a flow. A failing condition skips it.
 | `tz:<op>:<value>` | `tz:contains:Europe`, `tz:offset:3` |
 | `url:<op>:<value>` | `url:pathStartsWith:/blog`, `url:query:utm_source=ads` |
 | `ua:<op>:<value>` | `ua:device:mobile`, `ua:browser:safari`, `ua:os:ios` |
-| a function | Return `true` to run, `false` to skip |
+| a function | Return `true` to run, `false` to skip; decided there and then, so not async |
 | a boolean | `false` skips |
 
 Operators: `equals`/`is`, `contains`, `startsWith`, `in` for language;
@@ -428,6 +479,10 @@ Combine with an array (all must pass) or an operator object:
 ```
 
 An unparseable regular expression fails the condition rather than throwing.
+So does a condition function that throws or returns a promise, and a plugin
+handler that throws; each is reported as `CONDITION_FAILED`. A condition
+nothing knows (a typo, a plugin's form without the plugin, an unknown
+operator) is reported as `UNKNOWN_CONDITION` and passes.
 
 ## Plugins
 
@@ -439,6 +494,19 @@ A plugin is a function that receives the instance and registers handlers on it.
 | `triggers` | The nine trigger handlers above |
 | `logger` | A console logger with readable message names. Errors always; QSL's own progress only with `qsl.debug = true` |
 | `events` | Re-dispatches `DOMContentLoaded` and `load` per process, so late-loaded third-party scripts that listen for them still initialise |
+
+A plugin extends QSL in three ways, each a `Set` on the instance:
+
+- `listeners` — it follows the run through its signals (see Listening
+  below): `LOAD`, the `PROCESS_*` signals, `RESET`, `ALL_COMPLETED`. Anything
+  it keeps from a run it lets go on `RESET`, or it grows with every run on a
+  long-lived page.
+- `conditionHandlers` and `triggerHandlers` — it adds condition and trigger
+  forms a config may use.
+- `handlerCallbacksFilters` — it adds to what a type handler is given.
+
+A listener that throws is reported as `LISTENER_FAILED`, any other plugin
+function as `CALLBACK_FAILED`; neither stops the run.
 
 Every plugin above is already registered in the full
 browser bundle. The slim bundle registers none of them. With the ESM entry you
@@ -469,6 +537,7 @@ signal is about. A run reads like this:
 | Signal | When | `args` |
 | --- | --- | --- |
 | `PROCESS_ADDED` | `add()` | |
+| `MESSAGE` | a `console` process runs | message |
 | `LOAD` | `load()` starts | |
 | `FLOW_STARTED` | a flow starts, after its trigger and dependencies | |
 | `PROCESS_RESOLVED` | the dependencies of a process that has any have settled | |
@@ -476,39 +545,53 @@ signal is about. A run reads like this:
 | `PROCESS_STARTED` | its handler is called | |
 | `PROCESS_RETRY` | a failed attempt is retried | attempt |
 | `PROCESS_COMPLETED` / `PROCESS_FAILED` / `PROCESS_SKIPPED` | the process settles | — / error / reason |
-| `FLOW_COMPLETED` / `FLOW_SKIPPED` | a flow ends | outcome / reason |
-| `ALL_COMPLETED` | the run ends | |
+| `FLOW_COMPLETED` / `FLOW_FAILED` / `FLOW_SKIPPED` | a flow ends | — / — / reason |
+| `ALL_COMPLETED` | the run ends | how each process ended, a `Map` like `processStates` |
 
 Every process ends with exactly one of `PROCESS_COMPLETED`, `PROCESS_FAILED`
 and `PROCESS_SKIPPED`, emitted once its state is in `processStates`. A
 timeout is a `PROCESS_FAILED` whose error is named `TimeoutError`. Problems
-come at the `error` level: `DEP_NOT_FOUND`, `FLOW_DEP_SKIPPED`,
-`CIRC_PROCESS_DEP_SKIPPED`, `CIRC_FLOW_DEP_SKIPPED`, `PRELOAD_ERROR`,
-`CONDITION_FAILED`, `TRIGGER_FAILED`, `CALLBACK_FAILED`.
+come at the `error` level: `DEP_NOT_FOUND` (for a process, or with `flow` set
+and no `process`, for a flow), `DUPLICATE_ID`, `CIRC_PROCESS_DEP_SKIPPED`,
+`CIRC_FLOW_DEP_SKIPPED`, `PRELOAD_ERROR`, `CONDITION_FAILED`,
+`UNKNOWN_CONDITION`, `TRIGGER_FAILED`, `UNKNOWN_TRIGGER`, `CALLBACK_FAILED`.
 
 Listeners run synchronously, in the middle of the run, so keep them quick and
 defer anything heavy. One that throws is reported to the logger as
 `LISTENER_FAILED`; the others and the run carry on. Listeners stay across
-runs and are removed by `destroy()`. With none registered, nothing is built
-for them. A plugin can report its own signals with
+runs and are removed by `destroy()`. A plugin can report its own signals with
 `qsl.emit(type, level, subject, ...args)`.
 
 ## Events
 
-Call `useEvents()` to enable them. Each carries the process config as
-`detail`. They are built from the same stream, by a listener that
-`useEvents()` adds.
+They are on from `init()`, built from the same stream by a listener QSL adds
+for itself: one event for each process and flow signal below, and one for
+`ALL_COMPLETED`.
 
-`QSL:started`, `QSL:completed`, `QSL:error`, `QSL:skipped`,
-`QSL:all:completed`.
+| Process | Flow | Signal |
+| --- | --- | --- |
+| `QSL:started` | `QSL:flow:started` | `*_STARTED` |
+| `QSL:completed` | `QSL:flow:completed` | `*_COMPLETED` |
+| `QSL:error` | `QSL:flow:error` | `*_FAILED` |
+| `QSL:skipped` | `QSL:flow:skipped` | `*_SKIPPED` |
 
-Exactly one of `completed`, `error` or `skipped` fires per process. On
+`QSL:all:completed` ends the run. A process event carries a copy of the
+process config as `detail`, without QSL's own `_` fields; a flow event
+`{ id }`. Processes and flows follow
+the same pattern in their config too: `onBeforeStart`, then `onComplete` or
+`onError`, and no callback for a skip, which only the signal and the event
+report.
+
+Exactly one of `completed`, `error` or `skipped` fires per process, and per
+flow. A flow fails when a process of it failed or was skipped because of a
+dependency; the failure itself is reported by the process. On
 `QSL:error`, `detail.error` holds what the handler rejected with — the
 element's `error` event for the built-in types, or an `Error` named
 `TimeoutError` when the process ran out of time. On `QSL:skipped`,
 `detail.reason` says why: `'condition'`, `'dependency'` (a `strict` process or
 flow whose dependency failed, was skipped or does not exist) or
-`'circular'` (it was on a cycle of waiting).
+`'circular'` (it was on a cycle of waiting); `QSL:flow:skipped` carries it
+too.
 
 ## TypeScript
 

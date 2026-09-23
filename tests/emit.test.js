@@ -47,7 +47,7 @@ describe('the stream', () => {
             'PROCESS_ADDED', 'LOAD', 'FLOW_STARTED', 'PROCESS_STARTED',
             'PROCESS_COMPLETED', 'FLOW_COMPLETED', 'ALL_COMPLETED',
         ]);
-        expect(signals.find((s) => s.type === 'FLOW_COMPLETED')).toMatchObject({ flow: 'main', process: null, args: ['completed'] });
+        expect(signals.find((s) => s.type === 'FLOW_COMPLETED')).toMatchObject({ flow: 'main', process: null, args: [] });
     });
 
     it('ends every process with exactly one of completed, failed or skipped, once its state is recorded', async () => {
@@ -97,6 +97,22 @@ describe('the stream', () => {
         expect(signals.filter((s) => s.type === 'PROCESS_RETRY').map((s) => s.args)).toEqual([[1], [2]]);
     });
 
+    it('ends a flow with exactly one of FLOW_COMPLETED, FLOW_FAILED and FLOW_SKIPPED', async () => {
+        const { core, signals } = await setup();
+        core.add({ id: 'a', type: 'ok' }, 'good');
+        core.add({ id: 'b', type: 'fail' }, 'bad');
+        core.setFlowOptions({ condition: false }, 'off');
+        core.add({ id: 'c', type: 'ok' }, 'off');
+        await core.load();
+
+        const ends = signals.filter((s) => /^FLOW_(COMPLETED|FAILED|SKIPPED)$/.test(s.type)).map((s) => [s.flow, s.type, s.level]);
+        expect(ends.sort()).toEqual([
+            ['bad', 'FLOW_FAILED', 'info'],
+            ['good', 'FLOW_COMPLETED', 'info'],
+            ['off', 'FLOW_SKIPPED', 'info'],
+        ]);
+    });
+
     it('reports a skipped flow with its reason', async () => {
         const { core, signals } = await setup();
         core.setFlowOptions({ condition: false }, 'off');
@@ -116,7 +132,7 @@ describe('the stream', () => {
         const errors = signals.filter((s) => s.level === 'error');
         expect(errors.find((s) => s.type === 'DEP_NOT_FOUND')).toMatchObject({ args: ['ghost'] });
         expect(errors.find((s) => s.type === 'DEP_NOT_FOUND').process.id).toBe('qsl-x');
-        expect(errors.find((s) => s.type === 'FLOW_DEP_SKIPPED')).toMatchObject({ flow: 'lost', process: null, args: ['ghostflow'] });
+        expect(errors.find((s) => s.type === 'DEP_NOT_FOUND' && !s.process)).toMatchObject({ flow: 'lost', args: ['ghostflow'] });
     });
 });
 
@@ -160,37 +176,102 @@ describe('listeners', () => {
         await core.load();
 
         expect(lines).toContainEqual(['PROCESS_STARTED', 'qsl-a']);
-        expect(lines).toContainEqual(['FLOW_COMPLETED', 'main', 'completed']);
-        expect(lines.flat().some((a) => a && typeof a === 'object')).toBe(false);
+        expect(lines).toContainEqual(['FLOW_COMPLETED', 'main']);
+        /**
+         * ALL_COMPLETED alone carries an object: how each process ended.
+         */
+        expect(lines.filter(([t]) => t !== 'ALL_COMPLETED').flat().some((a) => a && typeof a === 'object')).toBe(false);
+        expect(lines.find(([t]) => t === 'ALL_COMPLETED')[1]).toEqual(new Map([['qsl-a', 'completed']]));
     });
 });
 
 describe('DOM events', () => {
-    it('are built only after useEvents(), and useEvents() twice adds them once', async () => {
+    it('are on from init(), once however often init() is called, and back after destroy() and init()', async () => {
         const core = await freshCore();
         core.registerType('ok', () => undefined);
         const seen = vi.fn();
         window.addEventListener('QSL:completed', seen);
 
+        await core.init();
+        expect(core.listeners.size).toBe(1);
         core.add({ id: 'a', type: 'ok' });
         await core.load();
-        expect(seen).not.toHaveBeenCalled();
-        expect(core.listeners.size).toBe(0);
+        expect(seen).toHaveBeenCalledTimes(1);
+        expect(seen.mock.calls[0][0].detail.id).toBe('qsl-a');
 
-        core.useEvents().useEvents();
-        expect(core.listeners.size).toBe(1);
+        core.destroy();
+        core.registerType('ok', () => undefined);
         core.add({ id: 'b', type: 'ok' });
+        await core.load();
+        expect(seen).toHaveBeenCalledTimes(1);
+
+        await core.init();
+        core.registerType('ok', () => undefined);
+        core.add({ id: 'c', type: 'ok' });
         await core.load();
         window.removeEventListener('QSL:completed', seen);
 
-        expect(seen).toHaveBeenCalledTimes(1);
-        expect(seen.mock.calls[0][0].detail.id).toBe('qsl-b');
+        expect(seen).toHaveBeenCalledTimes(2);
+        expect(seen.mock.calls[1][0].detail.id).toBe('qsl-c');
+    });
+
+    it('come for flows as for processes: QSL:flow:started, :completed, :error, :skipped', async () => {
+        const core = await freshCore();
+        core.registerType('ok', () => undefined);
+        core.registerType('fail', () => Promise.reject(new Error('nope')));
+        const got = [];
+        const names = ['started', 'completed', 'error', 'skipped'].map((n) => 'QSL:flow:' + n);
+        const record = (e) => got.push([e.type.slice(9), e.detail]);
+        for (const name of names) window.addEventListener(name, record);
+
+        core.add({ id: 'a', type: 'ok' }, 'good');
+        core.add({ id: 'b', type: 'fail' }, 'bad');
+        core.setFlowOptions({ condition: false }, 'off');
+        core.add({ id: 'c', type: 'ok' }, 'off');
+        await core.load();
+        for (const name of names) window.removeEventListener(name, record);
+
+        expect(got).toEqual(expect.arrayContaining([
+            ['started', { id: 'good' }], ['completed', { id: 'good' }],
+            ['started', { id: 'bad' }], ['error', { id: 'bad' }],
+            ['skipped', { id: 'off', reason: 'condition' }],
+        ]));
+        expect(got).toHaveLength(5);
+    });
+
+    it('hand a page handler a copy: changing it does not change the process', async () => {
+        const core = await freshCore();
+        core.autoReset = false;
+        core.registerType('ok', () => undefined);
+        const tamper = (e) => { e.detail.src = 'evil.js'; e.detail.id = 'other'; };
+        window.addEventListener('QSL:started', tamper);
+        core.add({ id: 'a', type: 'ok', src: 'good.js' });
+        await core.load();
+        window.removeEventListener('QSL:started', tamper);
+
+        expect(core._processIndex.get('qsl-a').src).toBe('good.js');
+        expect(core.processStates.get('qsl-a')).toBe('completed');
+    });
+
+    it('carry the public fields of a process, none of QSL\'s own', async () => {
+        const core = await freshCore();
+        core.registerType('ok', () => undefined);
+        const keys = [];
+        const record = (e) => keys.push(Object.keys(e.detail).sort());
+        window.addEventListener('QSL:started', record);
+        window.addEventListener('QSL:completed', record);
+        core.add({ id: 'a', type: 'ok', src: '/a.js', custom: 1 }, 'f');
+        await core.load();
+        window.removeEventListener('QSL:started', record);
+        window.removeEventListener('QSL:completed', record);
+
+        const expected = ['custom', 'flowId', 'id', 'skipped', 'src', 'type'];
+        expect(keys).toEqual([expected, expected]);
     });
 
     it('carry the error on QSL:error and nothing extra on QSL:all:completed', async () => {
         const core = await freshCore();
         core.registerType('fail', () => Promise.reject(new Error('nope')));
-        core.useEvents();
         const got = [];
         const onError = (e) => got.push(['error', e.detail.id, e.detail.error.message]);
         const onAll = (e) => got.push(['all', e.detail]);

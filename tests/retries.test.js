@@ -22,14 +22,13 @@ afterEach(() => {
 function flaky(fails) {
     const calls = [];
     const handler = (process, callbacks) => {
-        calls.push({ onError: process.onError, retrying: !!callbacks.retrying });
+        calls.push({ onError: process.onError && 'guarded', retrying: !!callbacks.retrying });
         return calls.length <= fails ? Promise.reject(new Error('attempt ' + calls.length)) : undefined;
     };
     return { handler, calls };
 }
 
 function record(core) {
-    core.useEvents();
     const events = [];
     const fns = ['completed', 'error', 'skipped'].map((name) => {
         const fn = (e) => events.push({ name, id: e.detail.id.replace(/^qsl-/, ''), reason: e.detail.reason, error: e.detail.error });
@@ -88,7 +87,7 @@ describe('retries', () => {
         expect(calls).toEqual([
             { onError: null, retrying: true },
             { onError: null, retrying: true },
-            { onError, retrying: false },
+            { onError: 'guarded', retrying: false },
         ]);
     });
 
@@ -263,7 +262,6 @@ describe('retryDelay', () => {
         const core = await freshCore();
         const { handler, starts } = failing();
         core.registerType('down', handler);
-        core.useEvents();
         const errors = [];
         const onError = (e) => errors.push(e.detail.error.name);
         window.addEventListener('QSL:error', onError);
@@ -351,7 +349,7 @@ describe('late flows', () => {
         let lateFlow;
         core.registerType('adder', () => {
             core.add({ id: 'l', type: 'late' }, 'f');
-            lateFlow = [...core.flowOptions.keys()].find((k) => k.startsWith('f+late-'));
+            lateFlow = [...core.flows.keys()].find((k) => k.startsWith('f+late-'));
         });
         core.setFlowOptions({ retries: 2, timeout: 5000 }, 'f');
         core.add({ id: 'a', type: 'adder' }, 'f');

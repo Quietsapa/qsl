@@ -327,7 +327,7 @@ await scenario('extending: types, plugin, logger, timings', 'extending/index.htm
         logger: document.getElementById('logger').textContent,
     }));
     const t = result.timings;
-    if (!result.flows.includes('misconfiguredCOMPLETEDfailed')) throw new Error('flow outcome: ' + result.flows);
+    if (!result.flows.includes('misconfigureddonefailed')) throw new Error('flow outcome: ' + result.flows);
     for (const expected of ['widget-a:skipped: circular', 'typo:completed', 'no-such-type:error', 'map:completed', 'comments-ready:completed']) {
         if (!t.includes(expected)) throw new Error('missing ' + expected);
     }

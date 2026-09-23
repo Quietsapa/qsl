@@ -156,12 +156,12 @@ describe('flow options', () => {
         expect(starts(log)).toEqual(['c', 'b', 'a']);
     });
 
-    it('beforeStart runs before the first process and onComplete after the last', async () => {
+    it('onBeforeStart runs before the first process and onComplete after the last', async () => {
         const core = await freshCore();
         const order = [];
 
         core.setFlowOptions({
-            beforeStart: () => order.push('beforeStart'),
+            onBeforeStart: () => order.push('beforeStart'),
             onComplete: () => order.push('onComplete'),
         }, 'f');
         core.add({ id: 'a', onComplete: () => order.push('a') }, 'f');
@@ -175,7 +175,7 @@ describe('flow options', () => {
         core.setFlowOptions({ delay: 5, group: 'g' }, 'f');
         core.setFlowOptions({ priority: 3 }, 'f');
 
-        const options = core.flowOptions.get('f');
+        const options = core.flows.get('f').options;
         expect(options).toMatchObject({ delay: 5, group: 'g', priority: 3 });
     });
 });
@@ -309,23 +309,8 @@ describe('trigger combinations', () => {
 });
 
 describe('lifecycle events', () => {
-    it('are not fired without useEvents()', async () => {
-        const core = await freshCore();
-        const seen = listen(['started', 'completed', 'error', 'skipped', 'all:completed']);
-
-        core.registerType('broken', () => Promise.reject(new Error('x')));
-        core.add({ id: 'a' });
-        core.add({ id: 'b', condition: false });
-        core.add({ id: 'c', type: 'broken' });
-        await core.load();
-        seen.stop();
-
-        expect([...seen]).toEqual([]);
-    });
-
     it('fire started before exactly one outcome per process, then all:completed once', async () => {
         const core = await freshCore();
-        core.useEvents();
         const seen = listen(['started', 'completed', 'error', 'skipped', 'all:completed']);
 
         core.registerType('broken', () => Promise.reject(new Error('x')));
@@ -345,7 +330,6 @@ describe('lifecycle events', () => {
 
     it('carry the whole process config as detail', async () => {
         const core = await freshCore();
-        core.useEvents();
         let detail = null;
         const fn = (e) => { detail = e.detail; };
         window.addEventListener('QSL:completed', fn);
@@ -377,17 +361,22 @@ describe('run lifecycle', () => {
         expect(runs).toBe(1);
     });
 
-    it('setOnAllComplete runs once at the end and is cleared by the reset', async () => {
+    it('setOnAllComplete runs once at the end of every run, and destroy() clears it', async () => {
         const core = await freshCore();
         let calls = 0;
         core.setOnAllComplete(() => calls++);
         core.add({ id: 'x' });
         await core.load();
         expect(calls).toBe(1);
-        expect(core.onAllComplete).toBeNull();
+        core.add({ id: 'y' });
+        await core.load();
+        expect(calls).toBe(2);
 
         core.setOnAllComplete('not a function');
-        expect(core.onAllComplete).toBeNull();
+        expect(core._onAllComplete).toBeNull();
+        core.setOnAllComplete(() => {});
+        core.destroy();
+        expect(core._onAllComplete).toBeNull();
     });
 
     it('init() twice returns the same instance and registers nothing twice', async () => {
@@ -412,7 +401,7 @@ describe('run lifecycle', () => {
         core.setLogger(null);
         core.add({ id: 'x', message: 'hi' });
         await core.load();
-        expect(lines.some(([type]) => type === 'hi')).toBe(true);
+        expect(lines).toContainEqual(['MESSAGE', 'qsl-x', 'hi']);
     });
 });
 
@@ -453,20 +442,20 @@ describe('add()', () => {
     it('true is the ordered flow', async () => {
         const core = await freshCore();
         core.add({ id: 'x' }, true);
-        expect(core.flows.get('ordered')[0].id).toBe('qsl-x');
-        expect(core.flowOptions.get('ordered').ordered).toBe(true);
+        expect(core.flows.get('ordered').processes[0].id).toBe('qsl-x');
+        expect(core.flows.get('ordered').options.ordered).toBe(true);
     });
 
-    it.each([[null], [undefined], [false], [42]])('flow %s is the default flow', async (flowId) => {
+    it.each([[null], [undefined], [false], [{}]])('flow %s is the default flow', async (flowId) => {
         const core = await freshCore();
         core.add({ id: 'x' }, flowId);
-        expect(core.flows.get('default')[0].id).toBe('qsl-x');
+        expect(core.flows.get('default').processes[0].id).toBe('qsl-x');
     });
 
     it('generates an id and defaults the type to console', async () => {
         const core = await freshCore();
         core.add({});
-        const process = core.flows.get('default')[0];
+        const process = core.flows.get('default').processes[0];
         expect(process.id).toMatch(/^qsl-[a-z0-9]+$/);
         expect(process.type).toBe('console');
     });
@@ -474,7 +463,7 @@ describe('add()', () => {
     it('removes duplicate dependencies', async () => {
         const core = await freshCore();
         core.add({ id: 'x', depends: ['a', 'a', 'b'] });
-        expect(core.flows.get('default')[0].depends).toEqual(['a', 'b']);
+        expect(core.flows.get('default').processes[0].depends).toEqual(['a', 'b']);
     });
 
     it('ignores anything that is not an object, and stays chainable', async () => {
@@ -499,19 +488,20 @@ describe('dependencies that point nowhere', () => {
         expect(lines.find(([t]) => t === 'DEP_NOT_FOUND')).toEqual(['DEP_NOT_FOUND', 'qsl-x', 'nope']);
     });
 
-    it('a flow depending on a flow that does not exist is skipped', async () => {
+    it('a flow depending on a flow that does not exist runs, like a process; strict, it is skipped', async () => {
         const core = await freshCore();
-        core.useEvents();
         const seen = listen(['skipped']);
         const ran = [];
 
         core.setFlowOptions({ depends: ['nope'] }, 'f');
+        core.setFlowOptions({ depends: ['nope'], strict: true }, 'g');
         core.add({ id: 'x', onComplete: () => ran.push('x') }, 'f');
+        core.add({ id: 'y', onComplete: () => ran.push('y') }, 'g');
         expect(await within(core.load())).toBe('resolved');
         seen.stop();
 
-        expect(ran).toEqual([]);
-        expect([...seen]).toEqual([['skipped', 'qsl-x']]);
+        expect(ran).toEqual(['x']);
+        expect([...seen]).toEqual([['skipped', 'qsl-y']]);
     });
 
     it('a strict process is skipped when its dependency in another flow fails', async () => {
@@ -529,7 +519,6 @@ describe('dependencies that point nowhere', () => {
 describe('unknown type', () => {
     it('reports it as an error, settles the process as failed and fires QSL:error', async () => {
         const core = await freshCore();
-        core.useEvents();
         const lines = [];
         core.setLogger({ log: () => {}, error: (...a) => lines.push(a) });
         let error = null;
@@ -547,63 +536,23 @@ describe('unknown type', () => {
 });
 
 describe('plugin hooks', () => {
-    it('addProcessFilters can rewrite the flow and the config', async () => {
-        const core = await freshCore();
-        core.addProcessFilters.add((flowId, config) => ['rerouted', { ...config, tagged: true }]);
-
-        core.add({ id: 'x' }, 'original');
-        expect(core.flows.has('original')).toBe(false);
-        expect(core.flows.get('rerouted')[0].tagged).toBe(true);
-    });
-
-    it('flowIdFilters decide which flows a run starts', async () => {
-        const core = await freshCore();
-        const ran = [];
-        /**
-         * The filter sees runFlow() too, with just that flow: let a single
-         * requested flow through, or it could never be started.
-         */
-        core.flowIdFilters.add((ids) => (ids.length === 1 ? ids : ids.filter((id) => id !== 'held')));
-
-        core.add({ id: 'a', onComplete: () => ran.push('a') }, 'go');
-        core.add({ id: 'b', onComplete: () => ran.push('b') }, 'held');
-        const loading = core.load();
-
-        expect(await within(loading, 80)).toBe('hung');
-        expect(ran).toEqual(['a']);
-
-        core.runFlow('held');
-        expect(await within(loading)).toBe('resolved');
-        expect(ran).toEqual(['a', 'b']);
-    });
-
-    it('completedFlowsActions can hold the end of a run back', async () => {
-        const core = await freshCore();
-        let release = false;
-        core.completedFlowsActions.add((flowsDone) => flowsDone && release);
-
-        core.add({ id: 'x' });
-        const loading = core.load();
-        expect(await within(loading, 50)).toBe('hung');
-
-        release = true;
-        core.maybeComplete();
-        expect(await within(loading)).toBe('resolved');
-    });
-
-    it('allCompleteActions, processCompleteActions, resetActions and loadActions run at their moments', async () => {
+    it('a plugin follows the run through its signals: LOAD, PROCESS_*, RESET', async () => {
         const core = await freshCore();
         const order = [];
-        core.loadActions.add(() => order.push('load'));
-        core.processCompleteActions.add((p) => order.push('process:' + p.id));
+        core.listeners.add(({ type, process }) => {
+            if (type === 'LOAD' || type === 'RESET') order.push(type);
+            if (type === 'PROCESS_COMPLETED') order.push('process:' + process.id);
+        });
         core.setOnAllComplete(() => order.push('onAllComplete'));
-        core.allCompleteActions.add(() => order.push('all'));
-        core.resetActions.add(() => order.push('reset'));
 
         core.add({ id: 'x' });
         await core.load();
 
-        expect(order).toEqual(['load', 'process:qsl-x', 'onAllComplete', 'all', 'reset']);
+        /**
+         * With autoReset the run is cleared before the completion callbacks,
+         * so what they do belongs to the next run.
+         */
+        expect(order).toEqual(['LOAD', 'process:qsl-x', 'RESET', 'onAllComplete']);
     });
 
     it('handlerCallbacksFilters hand extra callbacks to every type handler', async () => {
@@ -617,19 +566,6 @@ describe('plugin hooks', () => {
         expect(received).toBe('world');
     });
 
-    it('initActions run on init, and may be async', async () => {
-        vi.resetModules();
-        const core = (await import('../src/core.js')).default;
-        const order = [];
-        core.initActions.add(async () => {
-            await new Promise((r) => setTimeout(r, 10));
-            order.push('init-action');
-        });
-
-        await core.init();
-        order.push('after-init');
-        expect(order).toEqual(['init-action', 'after-init']);
-    });
 });
 
 describe('combined plugins', () => {
@@ -672,13 +608,37 @@ describe('groups', () => {
     });
 });
 
+describe('a flow trigger', () => {
+    it('is armed once: released by runFlow(id, true), paused in its delay and run again, it does not arm afresh', async () => {
+        const core = await freshCore();
+        const ran = [];
+        let armed = 0;
+        core.registerType('mark', (p) => { ran.push(p.id); });
+        core.setFlowOptions({ group: 'g', delay: 20, trigger: () => { armed++; } }, 'f');
+        core.add({ id: 'x', type: 'mark' }, 'f');
+        const loading = core.load();
+        expect(core.flows.get('f').phase).toBe('armed');
+
+        core.runFlow('f', true);
+        expect(core.flows.get('f').phase).toBe('delay');
+        core.pauseGroup('g');
+        await new Promise((r) => setTimeout(r, 30));
+        expect(core.flows.get('f').phase).toBe('ready');
+        core.runGroup('g');
+
+        expect(await within(loading)).toBe('resolved');
+        expect(armed).toBe(1);
+        expect(ran).toEqual(['qsl-x']);
+    });
+});
+
 describe('flow callbacks', () => {
-    it('beforeStart and onComplete run once per flow, around its processes, before the end of the run', async () => {
+    it('onBeforeStart and onComplete run once per flow, around its processes, before the end of the run', async () => {
         const core = await freshCore();
         const order = [];
         core.registerType('mark', (p) => { order.push('process:' + p.id.replace(/^qsl-/, '')); });
-        core.setFlowOptions({ beforeStart: () => order.push('start:a'), onComplete: () => order.push('done:a') }, 'a');
-        core.setFlowOptions({ beforeStart: () => order.push('start:b'), onComplete: () => order.push('done:b'), depends: ['a'] }, 'b');
+        core.setFlowOptions({ onBeforeStart: () => order.push('start:a'), onComplete: () => order.push('done:a') }, 'a');
+        core.setFlowOptions({ onBeforeStart: () => order.push('start:b'), onComplete: () => order.push('done:b'), depends: ['a'] }, 'b');
         core.add({ id: 'x', type: 'mark' }, 'a');
         core.add({ id: 'y', type: 'mark' }, 'b');
         core.setOnAllComplete(() => order.push('all'));
@@ -687,15 +647,51 @@ describe('flow callbacks', () => {
         expect(order).toEqual(['start:a', 'process:x', 'done:a', 'start:b', 'process:y', 'done:b', 'all']);
     });
 
-    it('onComplete runs for a flow whose processes all failed or were skipped', async () => {
+    it('uses the callbacks the flow has when they are due, not those it had when it started', async () => {
         const core = await freshCore();
-        const done = [];
+        const calls = [];
+        core.registerType('slow', () => new Promise((r) => setTimeout(r, 20)));
+        core.setFlowOptions({ delay: 10, onBeforeStart: () => calls.push('old start'), onComplete: () => calls.push('old done') }, 'f');
+        core.add({ id: 'a', type: 'slow' }, 'f');
+        const loading = core.load();
+        core.setFlowOptions({ onBeforeStart: () => calls.push('new start') }, 'f');
+        await new Promise((r) => setTimeout(r, 15));
+        core.setFlowOptions({ onComplete: () => calls.push('new done') }, 'f');
+        await loading;
+
+        expect(calls).toEqual(['new start', 'new done']);
+    });
+
+    it('a flow ends with exactly one of onComplete and onError, as a process does', async () => {
+        const core = await freshCore();
+        const calls = [];
         core.registerType('fail', () => Promise.reject(new Error('x')));
-        core.setFlowOptions({ onComplete: () => done.push('f') }, 'f');
-        core.add({ id: 'a', type: 'fail' }, 'f');
-        core.add({ id: 'b', condition: () => false }, 'f');
+        const both = (id) => ({ onComplete: () => calls.push(id + ':complete'), onError: () => calls.push(id + ':error') });
+
+        /**
+         * A failure fails the flow; a condition that skips a process does not.
+         */
+        core.setFlowOptions(both('failed'), 'failed');
+        core.add({ id: 'a', type: 'fail' }, 'failed');
+        core.add({ id: 'b', condition: () => false }, 'failed');
+        core.setFlowOptions(both('fine'), 'fine');
+        core.add({ id: 'c', condition: () => false }, 'fine');
+        core.add({ id: 'd' }, 'fine');
+
+        /**
+         * A process skipped because its dependency failed fails its flow too.
+         */
+        core.setFlowOptions(both('after'), 'after');
+        core.add({ id: 'e', depends: ['a'], strict: true }, 'after');
+
+        /**
+         * A skipped flow gets neither: FLOW_SKIPPED and QSL:flow:skipped say so.
+         */
+        core.setFlowOptions({ ...both('off'), condition: false }, 'off');
+        core.add({ id: 'f' }, 'off');
         await core.load();
 
-        expect(done).toEqual(['f']);
+        expect(calls.sort()).toEqual(['after:error', 'failed:error', 'fine:complete']);
     });
+
 });

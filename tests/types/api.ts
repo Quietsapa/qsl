@@ -18,7 +18,7 @@ import qsl, {
     type QSL,
     type ProcessConfig,
     type Process,
-    type FlowState,
+    type Flow,
     type Plugin,
     type TypeHandler,
 } from '@quietsapa/qsl';
@@ -83,10 +83,12 @@ qsl.add({ type: 'script', src: '/a.js', fetchPriority: 'urgent' });
 qsl.add({ type: 'carousel', slides: 3 });
 // @ts-expect-error without a type, a process is the console type, which has no src
 qsl.add({ src: '/a.js' });
-// @ts-expect-error depends lists ids
-qsl.add({ type: 'script', src: '/a.js', depends: 'sdk' });
-// @ts-expect-error a flow id is a string, true or nothing
-qsl.add({ type: 'script', src: '/a.js' }, 42);
+// depends is a list of ids, or one id; a flow id may be a number
+qsl.add({ type: 'script', src: '/a.js', depends: 'sdk' }, 42);
+// @ts-expect-error depends holds ids, not numbers
+qsl.add({ type: 'script', src: '/a.js', depends: [1] });
+// @ts-expect-error a flow id is a string, a number, true or nothing
+qsl.add({ type: 'script', src: '/a.js' }, {});
 
 /**
  * ── Triggers ────────────────────────────────────────────────────────────────
@@ -135,29 +137,45 @@ qsl.add({ type: 'script', src: '/a.js', condition: { operator: 'or', triggers: [
  */
 qsl.setFlowOptions({ ordered: true, strict: true, between: 120, depends: ['analytics'], timeout: 5000, retries: 1, retryDelay: 500 }, 'setup');
 qsl.setFlowOptions({ group: 'marketing', paused: true, preload: true, priority: 5, delay: 100, fireEvents: false }, 'ads');
-qsl.setFlowOptions({ beforeStart: () => {}, onComplete: () => {} });
+qsl.setFlowOptions({ onBeforeStart: () => {}, onComplete: () => {}, onError: () => {} });
+// @ts-expect-error renamed in 0.8.0: onBeforeStart, as on a process
+qsl.setFlowOptions({ beforeStart: () => {} });
 qsl.setFlowOptions({ condition: 'url:query:debug' }, true);
+qsl.between = 150;
+expectTypeOf(qsl.between).toEqualTypeOf<number>();
 qsl.runFlow('ads').pauseGroup('marketing').runGroup('marketing').reset();
 expectTypeOf(qsl.inGroup('marketing')).toEqualTypeOf<string[]>();
 expectTypeOf(qsl.processStates.get('qsl-sdk')).toEqualTypeOf<'completed' | 'failed' | 'skipped' | undefined>();
 // @ts-expect-error gone in 0.5.0: processStates says how every process ended
 qsl.completedProcesses;
 
-const flow = qsl.flowOptions.get('setup');
+const flow = qsl.flows.get('setup');
 if (flow) {
-    expectTypeOf(flow).toEqualTypeOf<FlowState>();
-    expectTypeOf(flow.status).toEqualTypeOf<'READY' | 'RUNNING' | 'COMPLETED'>();
+    expectTypeOf(flow).toEqualTypeOf<Flow>();
+    expectTypeOf(flow.phase).toEqualTypeOf<'ready' | 'armed' | 'delay' | 'running' | 'done'>();
     expectTypeOf(flow.outcome).toEqualTypeOf<'completed' | 'failed' | 'skipped' | undefined>();
+    expectTypeOf(flow.processes).toEqualTypeOf<Process[]>();
+    expectTypeOf(flow.options.group).toEqualTypeOf<string | null | undefined>();
+}
+// @ts-expect-error gone in 0.8.0: a flow's options live on its record in `flows`
+qsl.flowOptions;
+if (flow) {
+    // @ts-expect-error a flow's options change through setFlowOptions()
+    flow.options.depends = ['analytics'];
+    // @ts-expect-error nor is the record itself written to
+    flow.phase = 'done';
 }
 
-// @ts-expect-error depends lists flow ids
 qsl.setFlowOptions({ depends: 'analytics' }, 'setup');
+// @ts-expect-error depends holds flow ids, not numbers
+qsl.setFlowOptions({ depends: [1] }, 'setup');
 // @ts-expect-error not a flow option
 qsl.setFlowOptions({ prefetch: true }, 'setup');
 
 /**
  * ── Events ──────────────────────────────────────────────────────────────────
  */
+// @ts-expect-error gone in 0.8.0: the QSL:* events are always on
 qsl.useEvents();
 window.addEventListener('QSL:completed', (e) => {
     expectTypeOf(e.detail.id).toEqualTypeOf<string>();
@@ -168,6 +186,11 @@ window.addEventListener('QSL:skipped', (e) => {
     expectTypeOf(e.detail.reason).toEqualTypeOf<'condition' | 'dependency' | 'circular' | null>();
 });
 window.addEventListener('QSL:all:completed', () => {});
+window.addEventListener('QSL:flow:completed', (e) => { expectTypeOf(e.detail.id).toEqualTypeOf<string>(); });
+window.addEventListener('QSL:flow:error', (e) => { expectTypeOf(e.detail.id).toEqualTypeOf<string>(); });
+window.addEventListener('QSL:flow:skipped', (e) => {
+    expectTypeOf(e.detail.reason).toEqualTypeOf<'condition' | 'dependency' | 'circular'>();
+});
 
 /**
  * ── The CDN build ───────────────────────────────────────────────────────────
@@ -202,12 +225,18 @@ const handler: TypeHandler = (process, callbacks) => new Promise<void>((resolve,
 qsl.registerType('iframe', handler);
 
 /**
- * A process as QSL hands it to hooks and handlers.
+ * A process as QSL hands it to plugins and handlers.
  */
-qsl.processCompleteActions.add(function (process) {
+qsl.handlerCallbacksFilters.add(function (process) {
     expectTypeOf(this).toEqualTypeOf<QSL>();
     expectTypeOf(process).toEqualTypeOf<Process>();
 });
+// @ts-expect-error gone in 0.8.0: listen for the PROCESS_* signals instead
+qsl.processCompleteActions;
+// @ts-expect-error gone in 0.8.0: listen for LOAD and RESET instead
+qsl.loadActions;
+// @ts-expect-error gone in 0.8.0: a plugin sets itself up when it is used
+qsl.initActions;
 /**
  * The stream: one object per signal, the process when there is one.
  */
@@ -226,13 +255,14 @@ qsl.emit('X', 'warn', null);
 
 qsl.conditionHandlers.add((condition) => (condition === 'network:fast' ? !navigator.onLine : null));
 qsl.triggerHandlers.add((trigger) => (trigger === 'scroll:60' ? (release) => release() : null));
-qsl.allCompleteActions.add(function () { expectTypeOf(this).toEqualTypeOf<QSL>(); });
-qsl.completedFlowsActions.add((done, flows, flowOptions) => {
-    expectTypeOf(flows.get('f')).toEqualTypeOf<Process[] | undefined>();
-    expectTypeOf(flowOptions.get('f')).toEqualTypeOf<FlowState | undefined>();
-    return done;
-});
-qsl.maybeComplete();
+// @ts-expect-error set aside in 0.8.0 until a plugin needs them
+qsl.allCompleteActions;
+// @ts-expect-error set aside in 0.8.0 until a plugin needs them
+qsl.completedFlowsActions;
+// @ts-expect-error set aside in 0.8.0: a flow that should not start yet is a paused one
+qsl.flowIdFilters;
+// @ts-expect-error set aside in 0.8.0: shape the config before add()
+qsl.addProcessFilters;
 
 const configs: ProcessConfig[] = [{ type: 'script', src: '/a.js' }, { type: 'pixel', src: '/p.gif' }];
 configs.forEach((config) => qsl.add(config));

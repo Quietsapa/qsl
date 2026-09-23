@@ -232,16 +232,18 @@ export function appearsTrigger(QSL) {
 }
 
 /**
- * `media:<query>` - fires when the media query matches, now or later.
+ * `media:<query>` - fires when the media query matches, now or later. With
+ * no query, or no matchMedia, it fires at once: a trigger only says when,
+ * and like `visible:` without IntersectionObserver it does not hold things
+ * back for good. Whether to run at all is a condition's job.
  * @param {Object} QSL
  */
 export function mediaQueryTrigger(QSL) {
-    QSL.triggerHandlers.add(function (opt, o) {
+    QSL.triggerHandlers.add(function (opt) {
         if (!isPrefixed(opt, 'media:')) return null;
         const query = arg(opt, 'media:');
         return (cb) => {
             if (!query.length || typeof window.matchMedia !== 'function') {
-                if (o) o.skipped = true;
                 cb();
                 return;
             }

@@ -6,6 +6,258 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-23
+
+One record per flow, and plugins that follow the run instead of being
+called into it. Where a flow is in the run used to be spread over a
+`flowOptions` map and five private sets; it is now one field, `phase`, on the
+flow's record. Of the twelve plugin hooks, four remain, each with its own
+job: `listeners` to observe the run, `conditionHandlers` and
+`triggerHandlers` to widen what a config may say, `handlerCallbacksFilters`
+to add to what a type handler is given. The run behaves as it did on 0.7.1:
+the test suite, the property tests and the browser tests pass unchanged
+wherever they did not name a removed hook.
+
+### Added
+
+- `qsl.between`: the instance default for `between`, like `qsl.strict` or
+  `qsl.timeout`. Every flow without its own `between` uses it, across runs;
+  `load({ between })` still gives one for a single run and takes its place.
+  Before, the only instance-wide `between` was the one `load()` was given,
+  and a value set on the instance by hand was overwritten by the next
+  `load()`.
+
+### Changed
+
+- **Breaking:** `flowOptions` is gone; its options are in `flows`, which now
+  holds one record per flow: `{ id, processes, options, phase, outcome, late }`.
+  `qsl.flowOptions.get(id).condition` becomes
+  `qsl.flows.get(id).options.condition`, and `qsl.flows.get(id)` is no longer
+  an array of processes but has them in `.processes`. The record is for
+  reading: options still change through `setFlowOptions()`, which also keeps
+  the flow's waiting and the cycle checks up to date, and the types now mark
+  `options` read-only down to each field.
+- **Breaking:** a flow's `status` (`'READY'`, `'RUNNING'`, `'COMPLETED'`) is
+  replaced by `phase`: `'ready'`, `'armed'` (waiting for its trigger),
+  `'delay'`, `'running'`, `'done'`. `outcome` is unchanged. In the types,
+  `FlowState` and `FlowStatus` give way to `Flow` and `FlowPhase`.
+- **Breaking:** the lifecycle hooks `initActions`, `loadActions`,
+  `processCompleteActions` and `resetActions` are gone: a plugin follows the
+  run through `listeners`, which see the `LOAD`, `PROCESS_COMPLETED`,
+  `PROCESS_FAILED`, `PROCESS_SKIPPED` and `RESET` signals at the same moments,
+  and sets itself up when it is `use()`d. The `events` plugin is now one
+  listener, and the `logger` plugin installs its logger in `use()` rather
+  than in `init()`, so a `setLogger()` after it wins.
+- **Processes and flows report the same way.** Each ends with exactly one
+  of `*_COMPLETED`, `*_FAILED` and `*_SKIPPED`, and has matching DOM events:
+  the new `QSL:flow:started`, `QSL:flow:completed`, `QSL:flow:error` and
+  `QSL:flow:skipped` carry `{ id }` and, on a skip, the `reason`. **Breaking**
+  for code that relied on the old shape:
+  - A failed flow emits the new `FLOW_FAILED` (at the info level: the failure
+    itself is reported by the process) instead of `FLOW_COMPLETED` with
+    `'failed'`; `FLOW_COMPLETED` no longer carries an outcome.
+  - The flow option `beforeStart` is renamed `onBeforeStart`, as on a
+    process. It is still not waited for.
+  - A flow's `onComplete` is called only when it completed; the new `onError`
+    is called when it failed. A skipped flow gets neither, as a skipped
+    process gets no callback.
+- **Breaking:** the `QSL:*` DOM events are always on: `useEvents()` and
+  `eventsEnabled` are gone. The events come from one listener QSL adds for
+  itself in `init()`; drop the `useEvents()` call. In Chromium they cost
+  about 2 µs per process. A process event's `detail` now holds only the
+  process's public fields: QSL's own `_` fields stay out of it, so a page
+  that keeps a `detail` keeps no internal state alive.
+- A process keeps its progress in two fields, `_phase` and `_wait`, instead
+  of a dozen private flags. The instance's own run state is private too, and
+  named so: `_generation`, `_processIndex`, `_waiters`, `_resolve`,
+  `_between`, `_onAllComplete`, and the `events` plugin's `_customEvents`.
+  None of them was in the types; code that read `processIndex` can find the
+  processes in `flows`.
+- The core's comments are cut down to what the code does not already say.
+- Three orderings are now fixed where they used to depend on internals:
+  flows released together by the same dependency start in the order they
+  were created; `runFlow()` or `runGroup()` on a flow still waiting for its
+  trigger leaves it waiting, and its condition is checked when the trigger
+  fires, not before; and a flow's trigger is spent once the flow starts, so a
+  flow paused in its delay and released again runs its delay afresh without
+  arming its trigger a second time.
+
+### Fixed
+
+- A flow waiting for other flows was never started if its `depends` was
+  cleared during the run (set to `[]`, `null` or `undefined`); the run hung.
+  It now starts at once, or in its turn if it is a late flow. `depends: null`
+  or `undefined` means no dependencies anywhere, as `[]` does.
+- A flow's `onBeforeStart`, `onComplete` and `onError` are the ones it has
+  when they are due. Before, a callback set with `setFlowOptions()` during
+  the flow's delay or while it ran was ignored in favour of the one it had
+  when it started.
+- **Memory on long-lived pages.** The `events` plugin registered each
+  listener it renamed for a process as a normal one: dispatched once, it
+  stayed on `document` or `window`, with everything its closure held, one per
+  process of every run. It is now registered with `once` and dropped after
+  its event. What processes of a run recorded is dropped on `RESET` too;
+  before, a process still running when its run was reset kept its entry for
+  the life of the page. Measured in Chromium over 10,000 runs of the full
+  bundle, the heap now levels off.
+
+### Removed
+
+- The plugin hooks `completedFlowsActions` and `allCompleteActions`, which no
+  plugin used. The end of a run reaches a plugin as the `ALL_COMPLETED`
+  signal, with how each process ended; the hooks come back if a plugin needs
+  them. `maybeComplete()` is no longer part of the public types.
+- The plugin hook `flowIdFilters`, which no plugin used either. A flow it
+  filtered out never started and held the run open; a flow that should not
+  start yet is a paused one (`paused`, `pauseGroup()`).
+- The plugin hook `addProcessFilters`, likewise unused. It saw the config
+  after the id was prefixed, so what it returned could break the process;
+  shape the config before calling `add()` instead.
+- The `FLOW_STATE` property on the instance, which `phase` replaces.
+
+## [0.7.1] - 2026-09-23
+
+Not published to npm: these changes reach npm with 0.8.0.
+
+Before this release the core was read line by line against the README and the
+type declarations, by two readers working separately, and every option was
+added to the property tests, which now also check timing. What that turned up
+is below. Several fixes change behaviour that 0.7.0 had; each is listed
+under Changed.
+
+### Added
+
+- **Misconfiguration is reported instead of passing silently:**
+  `UNKNOWN_TRIGGER` for a trigger nothing knows (it still holds nothing
+  back), `UNKNOWN_CONDITION` for a condition nothing knows or an unknown
+  operator (it still passes), `DUPLICATE_ID` for two processes of one run
+  with the same id.
+- `depends` takes a single id as well as a list, for processes and flows. A
+  flow id may be a number; it is taken as its string.
+
+### Changed
+
+- The `QSL:*` DOM events come from process signals and `ALL_COMPLETED`
+  only: a plugin's own signal, or a `console` process's message, named like
+  one of them no longer dispatches it.
+- **A flow depending on a flow that does not exist goes ahead, like a
+  process;** a strict one is skipped. It used to be skipped either way. The
+  missing flow is reported as `DEP_NOT_FOUND` with the flow as its subject;
+  `FLOW_DEP_SKIPPED` is gone.
+- **A process's `delay` and `onBeforeStart` are the core's**, for every type,
+  custom ones included: once, before the first attempt, outside the
+  `timeout`, after the trigger and dependencies. They used to be the built-in
+  types' own, ran again for each retry, counted against the timeout, and
+  custom types never saw them. `onBeforeStart` is awaited; one that throws
+  or rejects fails the process, with `onError`. `shadow` no longer loses the
+  caller's `onBeforeStart`.
+- **A flow's condition is checked when the flow would start:** a paused flow
+  when it is released, a flow waiting for other flows when they are done,
+  and every flow again after its `delay`. A paused flow used to be judged at
+  `load()`, so consent given before `runGroup()` came too late.
+  `beforeStart` and `FLOW_STARTED` now come after the flow's `delay`.
+- **A condition function that returns a promise fails**, as does a condition
+  handler that throws; both are reported as `CONDITION_FAILED`. An async
+  condition used to pass every time, whatever it resolved to.
+- `load()` called during a run returns a promise that resolves with that run,
+  instead of `undefined`. A run with nothing in it completes the usual way,
+  with `ALL_COMPLETED`, `onAllComplete` and `allCompleteActions`.
+- `setOnAllComplete()` holds until `destroy()`; `reset()` used to clear it
+  after every run.
+- **With `autoReset`, a run is cleared before the `ALL_COMPLETED` signal,
+  `onAllComplete` and `allCompleteActions`,** not after. Whatever they do —
+  `add()`, `setFlowOptions()`, `pauseGroup()`, `reset()`, `load()` again —
+  belongs to the next run; `load()` from any of them starts it. The signal
+  carries how each process of the finished run ended, as a `Map` like
+  `processStates`. A process added after a run completed with `autoReset`
+  off waits for the next run: `reset()` puts it there.
+- A process's condition is checked after it yields the main thread, right
+  before `onBeforeStart`: input handled in that task counts.
+- `pauseGroup()` also holds a flow that is in its `delay`: it goes back to
+  waiting (for flows it was given to depend on, too), no longer holds up the
+  late flows after it, and its delay starts over once it is released.
+  Released again within the same delay, it simply goes on.
+- `runFlow()` before `load()` only lifts the pause, and the flow starts with
+  the others; it used to start the flow on its own, before the run.
+- `completedFlowsActions` hooks combine: each gets the decision so far and
+  returns its own. The last hook used to overrule the others.
+- A `console` process reports its `message` as the `MESSAGE` signal, with
+  the process; a custom logger gets `('MESSAGE', id, message)`. The console
+  logger prints it as before.
+- `html` and `shadow` without a `tag` fail instead of completing without
+  doing anything.
+- The `media:` trigger with no query, or where there is no `matchMedia`, fires
+  at once. It used to mark a process skipped, with no reason, and let a flow
+  run.
+- The size budgets are 11 kB for the full bundle and 7.5 kB for slim, up from
+  10.5 and 7. The guards and reports above add about 0.45 kB to the core.
+
+### Fixed
+
+- **A run that could never end:** an `onAllComplete` that threw left `load()`
+  pending and every later run unable to complete; a condition handler, a
+  trigger handler's function, or any plugin hook that threw left the run
+  pending; a paused strict flow released after the flow it depends on was
+  skipped never ended the run; `setFlowOptions({ depends })` on a flow that
+  had already started could skip its running processes and end the run
+  twice.
+- **Triggers:** in an array or `and`, a trigger that fired more than once
+  counted once per firing, so the combination fired before the others had.
+- **Strict ordered chains:** a process skipped as circular did not break the
+  chain; a process whose own condition failed in a broken chain was reported
+  as skipped for `'dependency'` instead of `'condition'`.
+- **After a timeout**, the handler's own `onError` or `onComplete` arriving
+  late ran anyway: `onError` twice, or `onComplete` for a process that had
+  failed. They are dropped once the process has settled.
+- **`reset()` during a run** left that run's `load()` pending, and what the
+  run still had in flight (a flow finishing, a trigger firing, a process
+  settling) wrote into the next run. Now `load()` resolves, and leftovers
+  are ignored.
+- **Lost processes:** added from `onAllComplete` or a completion listener;
+  added to a flow started by `runFlow()` before `load()`; a late flow created
+  while another late flow waited for its trigger was not started until that
+  one fired; `add(config, 0)` during a run went to a new late flow instead of
+  flow `'0'`.
+- **A trigger fired twice:** a flow whose trigger had fired and that was then
+  given flows to wait for armed its trigger again once they were done.
+- **A trigger handler that threw while reading its option** made `load()`
+  throw, or left a process unsettled. It is reported as `TRIGGER_FAILED` and
+  counts as fired.
+- **Leftovers of a reset run** still called a type handler after an async
+  `onBeforeStart`, still called `onError` when a timeout ran out, and an
+  ordered chain or a `between` stagger went on running its remaining
+  processes. None of that happens now.
+- `destroy()` dropped the processes waiting for the next run into the fresh
+  instance.
+- An unknown type now calls the process's `onError`.
+- A `completedFlowsActions` hook that returns a promise no longer ends the
+  run by being truthy; anything but a boolean leaves the decision as it was.
+- The events plugin forgot a process's recorded lifecycle events once
+  dispatched; it used to keep them for the life of the page.
+
+### Removed
+
+- `timeoutFor()`, `retriesFor()` and `retryDelayFor()`, internal helpers,
+  are one `amount(process, key)`.
+
+### Development
+
+- **Tests from the documents, not the code:** `tests/spec.test.js`, 60 tests,
+  one per promise in the README and the declarations, with exact values and
+  three or more of a thing wherever two would not tell right from wrong. On
+  the code before this release, 37 of them fail.
+- **The property tests cover every option:** flow `delay`, `between`,
+  `priority`, paused flows released later, `pauseGroup()` and `runGroup()`
+  during the run, the global `between`, process
+  `delay`, `onBeforeStart` (sync, async, throwing), triggers combined with
+  arrays and `or`, and conditions that change during the run. A new rule
+  checks that every flow and every process starts in the exact millisecond
+  it may — from load, releases, flow dependencies, triggers, `between`,
+  `delay` and `onBeforeStart` — and that a condition held when it ran. Each
+  fix above was checked by putting the bug back: the tests fail. The
+  extended tests found one bug of their own: the paused strict flow that
+  never ended the run.
+
 ## [0.7.0] - 2026-09-23
 
 ### Added
@@ -705,7 +957,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Quietsapa/qsl/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Quietsapa/qsl/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Quietsapa/qsl/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Quietsapa/qsl/compare/v0.5.0...v0.5.1

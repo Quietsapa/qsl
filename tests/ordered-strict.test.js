@@ -16,7 +16,6 @@ async function setup() {
     const ran = [];
     core.registerType('ok', (p) => { ran.push(p.id.replace(/^qsl-/, '')); });
     core.registerType('fail', () => Promise.reject(new Error('boom')));
-    core.useEvents();
     const skipped = {};
     const onSkip = (e) => { skipped[e.detail.id.replace(/^qsl-/, '')] = e.detail.reason; };
     window.addEventListener('QSL:skipped', onSkip);
@@ -51,8 +50,8 @@ describe('strict ordered flows', () => {
         await core.load();
         stop();
 
-        expect(core.flowOptions.get('chain').outcome).toBe('failed');
-        expect(core.flowOptions.get('after').outcome).toBe('skipped');
+        expect(core.flows.get('chain').outcome).toBe('failed');
+        expect(core.flows.get('after').outcome).toBe('skipped');
         expect(ran).toEqual(['y']);
         expect(skipped.b).toBe('dependency');
     });

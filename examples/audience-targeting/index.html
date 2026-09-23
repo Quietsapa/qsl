@@ -131,12 +131,11 @@ window.QSLReady = function () {
     if (typeof condition === 'function') return 'function ' + (condition.name || '(anonymous)');
     return JSON.stringify(condition);
   }
-  qsl.useEvents();
   ['completed', 'skipped'].forEach(function (name) {
     window.addEventListener('QSL:' + name, function (e) {
       var d = e.detail;
       var onFlow = d.condition == null;
-      var condition = onFlow ? qsl.flowOptions.get(d.flowId).condition : d.condition;
+      var condition = onFlow ? qsl.flows.get(d.flowId).options.condition : d.condition;
       var row = document.createElement('tr');
       row.innerHTML = '<td></td><td class="' + name + '">' + (name === 'completed' ? 'ran' : 'skipped') + '</td><td></td>';
       row.cells[0].textContent = d.id.replace(/^qsl-/, '');

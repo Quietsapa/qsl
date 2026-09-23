@@ -42,7 +42,7 @@ describe('full preset', () => {
         const qsl = await loadPreset('full');
         expect(qsl.initialized).toBe(true);
         expect(qsl.logger?.VERSION).toBe('qsl-logger');
-        expect(qsl.customEvents).toBeInstanceOf(Map);
+        expect(qsl._customEvents).toBeInstanceOf(Map);
     });
 });
 

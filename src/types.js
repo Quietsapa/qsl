@@ -56,17 +56,20 @@ const inserted = ({ config, resolve }) => complete(resolve, config.onComplete);
 
 /**
  * Render an element.
+ *
+ * The process's `delay` and `onBeforeStart` are the core's to apply, once,
+ * before the first attempt; `prepare` is for a type's own groundwork.
  */
 const render = (config, callbacks = {}) => {
     return new Promise(async (resolve, reject) => {
-        const { flowId, tag, id, delay, data, onBeforeStart, onComplete, onError, footer, dom, onElement, onCustomResolve } = config;
-        if (!flowId || !tag || !id) {
+        const { flowId, tag, id, data, prepare, onComplete, onError, footer, dom, onElement, onCustomResolve } = config;
+        if (!flowId || !id) {
             resolve();
             return;
         }
         try {
-            if (onBeforeStart) await onBeforeStart(config);
-            if (delay) await new Promise(res => setTimeout(res, delay));
+            if (!tag) throw new Error(`The ${config.type} type needs a tag`);
+            if (prepare) await prepare(config);
             let el = document.createElement(tag);
             onElement?.(el, config);
 
@@ -231,7 +234,7 @@ const Shadow = {
     handler: (config, callbacks) => {
         return render({
             ...config,
-            onBeforeStart: async ({ tag }) => await window.customElements.whenDefined(tag),
+            prepare: ({ tag }) => window.customElements.whenDefined(tag),
             onElement: (el, { shadowData }) => {
                 el.data = shadowData || {};
                 if (shadowData?.hidden) el.setAttribute('hidden', '');    

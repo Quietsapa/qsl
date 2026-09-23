@@ -124,9 +124,7 @@ window.QSLReady = function () {
 
   /**
    * Demo plumbing: turn QSL's lifecycle events into the table above.
-   * useEvents() is the part that matters — without it QSL fires nothing.
    */
-  qsl.useEvents();
   ['started', 'completed', 'error', 'skipped'].forEach(function (name) {
     window.addEventListener('QSL:' + name, function (e) {
       var id = e.detail.id.replace(/^qsl-/, '');

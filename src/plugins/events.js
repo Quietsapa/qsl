@@ -95,18 +95,28 @@ export default function(QSL) {
     };
 
     /**
+     * A renamed listener is dispatched once, so it is registered with `once`:
+     * kept, it would stay on document or window for the life of the page.
+     */
+    const once = (opts) => (opts && typeof opts === 'object' ? { ...opts, once: true } : { capture: !!opts, once: true });
+
+    /**
      * Regular functions, not arrows: the original is called with whatever receiver the caller used, exactly as the native method would be. 
      */
     const documentPatch = createPatch(document, (original) => function (type, listener, opts) {
         if (active && type === 'DOMContentLoaded' && QSL.LIFECYCLE.DOMREADY) {
             /**
              * Only rename here. The renamed event is dispatched once, when
-             * the process completes (see processCompleteActions below).
+             * the process settles (see the PROCESS_* listener below).
              * Dispatching here as well would deliver it twice, and a vendor
              * that registers two listeners would see every one of them fire
              * once per registration on top of that.
              */
-            type = lifecycleIterator(type, QSL.EVENTS.DOMREADY, true);
+            const renamed = lifecycleIterator(type, QSL.EVENTS.DOMREADY, true);
+            if (renamed !== type) {
+                type = renamed;
+                opts = once(opts);
+            }
         }
         return original.call(this, type, listener, opts);
     });
@@ -114,7 +124,11 @@ export default function(QSL) {
     const windowPatch = createPatch(window, (original) => function (type, listener, opts) {
         if (active && type === 'load' && QSL.LIFECYCLE.LOADED) {
             // Same as above: rename now, dispatch once on completion.
-            type = lifecycleIterator(type, QSL.EVENTS.LOADED, true);
+            const renamed = lifecycleIterator(type, QSL.EVENTS.LOADED, true);
+            if (renamed !== type) {
+                type = renamed;
+                opts = once(opts);
+            }
         }
         return original.call(this, type, listener, opts);
     });
@@ -122,8 +136,8 @@ export default function(QSL) {
     /**
      * Initialize event interception when QSL loads.
      */
-    QSL.loadActions.add(function() {
-        if (active) return;
+    QSL.listeners.add(function({ type }) {
+        if (type !== 'LOAD' || active) return;
 
         const iterator = (type, eventType, changeEventName) => {
             let currentScriptId = null;
@@ -169,8 +183,8 @@ export default function(QSL) {
                                 const lastSlash = normalizedFile.lastIndexOf('/');
                                 const fileName = lastSlash === -1 ? normalizedFile : normalizedFile.slice(lastSlash + 1);
                                 
-                                for (const [flowId, processes] of this.flows) {
-                                    for (const process of processes) {
+                                for (const [flowId, flow] of this.flows) {
+                                    for (const process of flow.processes) {
                                         if (process.src && process.type === 'script') {
                                             const normalizedSrc = normalizeScriptPath(process.src);
                                             const srcLastSlash = normalizedSrc.lastIndexOf('/');
@@ -198,10 +212,10 @@ export default function(QSL) {
              */
             if (currentScriptId && targetFlowId) {
                 const flow = this.flows.get(targetFlowId);
-                const process = flow?.find(p => p.id === currentScriptId || p.id === this.PREFIX + currentScriptId);
+                const process = flow?.processes.find(p => p.id === currentScriptId || p.id === this.PREFIX + currentScriptId);
                 
                 if (process) {
-                    const shouldFireEvents = process.fireEvents !== false && (this.flowOptions.get(targetFlowId)?.fireEvents !== false);
+                    const shouldFireEvents = process.fireEvents !== false && (flow.options.fireEvents !== false);
                     if (shouldFireEvents) {
                         const key = processKey(process);
                         const eventName = `${type}:${key}`;
@@ -234,11 +248,12 @@ export default function(QSL) {
     });
 
     /**
-     * Fire tracked events when a process completes.
-     * Use processCompleteActions instead of patching execute.
+     * Fire tracked events when a process settles.
      */
-    QSL.processCompleteActions.add(function(process) {
+    QSL.listeners.add(function({ type, process }) {
+        if (type !== 'PROCESS_COMPLETED' && type !== 'PROCESS_FAILED' && type !== 'PROCESS_SKIPPED') return;
         const events = customEvents.get(process._eventKey);
+        customEvents.delete(process._eventKey);
         if (events && Array.isArray(events)) {
             /**
              * An event is only recorded once the real one has already fired
@@ -252,10 +267,12 @@ export default function(QSL) {
     });
 
     /**
-     * Cleanup: restore original addEventListener functions on reset.
-     * Use resetActions instead of patching reset.
+     * Cleanup on reset: drop what the run recorded (a process cut short never
+     * settles) and restore the original addEventListener functions.
      */
-    QSL.resetActions.add(function() {
+    QSL.listeners.add(function({ type }) {
+        if (type !== 'RESET') return;
+        customEvents.clear();
         if (!active) return;
         active = false;
         documentPatch.remove();
@@ -265,5 +282,5 @@ export default function(QSL) {
     /**
      * Store custom events map.
      */
-    QSL.customEvents = customEvents;
+    QSL._customEvents = customEvents;
 }

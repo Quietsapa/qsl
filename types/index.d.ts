@@ -105,13 +105,13 @@ export type CrossOrigin = 'anonymous' | 'use-credentials' | '';
 export interface ProcessOptions {
     /** Optional; one is generated. Stored with a `qsl-` prefix. */
     id?: string;
-    /** Ids of processes to wait for, as passed to `add()`, without the prefix. */
-    depends?: readonly string[];
+    /** Ids of processes to wait for, as passed to `add()`, without the prefix; or one id. */
+    depends?: string | readonly string[];
     condition?: Condition;
     trigger?: Trigger;
     /** Higher runs earlier within its flow. */
     priority?: number;
-    /** Milliseconds to wait before the process starts. */
+    /** Milliseconds to wait before the process starts, after its trigger and dependencies; not part of `timeout`. */
     delay?: number;
     /** Skip when a dependency failed or was skipped. Not set: the flow's, then the instance's. */
     strict?: boolean;
@@ -127,6 +127,7 @@ export interface ProcessOptions {
     footer?: boolean;
     /** Let the events plugin re-dispatch lifecycle events for this process. */
     fireEvents?: boolean;
+    /** Awaited once, before the first attempt and outside `timeout`; throwing or rejecting fails the process. */
     onBeforeStart?: (process: Process) => void | Promise<void>;
     onComplete?: () => void;
     onError?: (error: unknown) => void;
@@ -281,14 +282,14 @@ export interface FlowOptions {
     ordered?: boolean;
     /** Milliseconds to wait before the flow starts. */
     delay?: number;
-    /** Milliseconds between consecutive processes. */
+    /** Milliseconds between consecutive processes: after each ends if ordered, else the n-th starts `between` × n after the first. */
     between?: number | null;
     /** Higher runs earlier; flows with a trigger always go last. */
     priority?: number;
     trigger?: Trigger | null;
     condition?: Condition | null;
-    /** Flow ids to wait for. */
-    depends?: readonly string[];
+    /** Flow ids to wait for, or one id. */
+    depends?: string | readonly string[];
     /** Group name, for `pauseGroup()` and `runGroup()`. */
     group?: string | null;
     /** Hold the flow until `runFlow()` or `runGroup()`. */
@@ -300,21 +301,36 @@ export interface FlowOptions {
     /** Emit `<link rel=preload>` for its scripts and stylesheets. */
     preload?: boolean;
     fireEvents?: boolean;
-    /** Called when the flow starts. */
-    beforeStart?: (() => void) | null;
-    /** Called when the flow completes. */
+    /** Called when the flow starts, after its `delay`. Not waited for. */
+    onBeforeStart?: (() => void) | null;
+    /** Called when the flow ends with no process failed or skipped because of a dependency. */
     onComplete?: (() => void) | null;
+    /** Called instead of `onComplete` when a process of the flow failed or was skipped because of a dependency. */
+    onError?: (() => void) | null;
 }
 
-export type FlowStatus = 'READY' | 'RUNNING' | 'COMPLETED';
 export type Outcome = 'completed' | 'failed' | 'skipped';
 
 /**
- * A flow's options as stored, with its state.
+ * Where a flow is in the run: `ready` (not started), `armed` (waiting for
+ * its trigger), `delay` (waiting out its delay), `running`, `done`.
  */
-export interface FlowState extends FlowOptions {
-    status: FlowStatus;
-    outcome?: Outcome;
+export type FlowPhase = 'ready' | 'armed' | 'delay' | 'running' | 'done';
+
+/**
+ * A flow as the run keeps it.
+ */
+export interface Flow {
+    readonly id: string;
+    /** Its processes, in the order they were added. */
+    readonly processes: Process[];
+    /** Read-only: change a flow's options with `setFlowOptions()`, which also keeps its waiting and the cycle checks up to date. */
+    readonly options: Readonly<FlowOptions>;
+    readonly phase: FlowPhase;
+    /** How it ended, once `phase` is `done`. */
+    readonly outcome?: Outcome;
+    /** Created after the run started, when an add found the flow already under way. */
+    readonly late: boolean;
 }
 
 /**
@@ -326,6 +342,8 @@ export type SkipReason = 'condition' | 'dependency' | 'circular';
 export type ProcessEvent = CustomEvent<Process>;
 export type ProcessErrorEvent = CustomEvent<Process & { error: unknown }>;
 export type ProcessSkippedEvent = CustomEvent<Process & { reason: SkipReason | null }>;
+export type FlowEvent = CustomEvent<{ id: string }>;
+export type FlowSkippedEvent = CustomEvent<{ id: string; reason: SkipReason }>;
 
 /**
  * ── Plugins and the logger ──────────────────────────────────────────────────
@@ -342,12 +360,12 @@ export interface Logger {
  * What QSL reports, as it happens.
  */
 export type SignalType =
-    | 'LOAD' | 'RESET' | 'ALL_COMPLETED' | 'LATE_ADD'
+    | 'LOAD' | 'RESET' | 'ALL_COMPLETED' | 'LATE_ADD' | 'MESSAGE'
     | 'PROCESS_ADDED' | 'PROCESS_TRIGGERED' | 'PROCESS_RESOLVED' | 'PROCESS_STARTED' | 'PROCESS_RETRY'
     | 'PROCESS_COMPLETED' | 'PROCESS_FAILED' | 'PROCESS_SKIPPED'
-    | 'FLOW_STARTED' | 'FLOW_COMPLETED' | 'FLOW_SKIPPED'
-    | 'DEP_NOT_FOUND' | 'FLOW_DEP_SKIPPED' | 'CIRC_PROCESS_DEP_SKIPPED' | 'CIRC_FLOW_DEP_SKIPPED'
-    | 'PRELOAD_ERROR' | 'CONDITION_FAILED' | 'TRIGGER_FAILED' | 'CALLBACK_FAILED';
+    | 'FLOW_STARTED' | 'FLOW_COMPLETED' | 'FLOW_FAILED' | 'FLOW_SKIPPED'
+    | 'DEP_NOT_FOUND' | 'DUPLICATE_ID' | 'CIRC_PROCESS_DEP_SKIPPED' | 'CIRC_FLOW_DEP_SKIPPED'
+    | 'PRELOAD_ERROR' | 'CONDITION_FAILED' | 'UNKNOWN_CONDITION' | 'TRIGGER_FAILED' | 'UNKNOWN_TRIGGER' | 'CALLBACK_FAILED';
 
 /**
  * One entry of the stream listeners get. Every process ends with exactly one
@@ -377,6 +395,8 @@ export interface QSL {
 
     /** Instance default for `strict`. `false` unless set. */
     strict: boolean;
+    /** Instance default for a flow's `between`, in ms; `load({ between })` overrides it for one run. `0` unless set. */
+    between: number;
     /** Instance default for `timeout`, in ms. `0`, no limit, unless set. */
     timeout: number;
     /** Instance default for `retries`. `0` unless set. */
@@ -396,21 +416,24 @@ export interface QSL {
     /** Whether DOMContentLoaded and load have fired, kept up to date from `init()`. */
     readonly LIFECYCLE: { DOMREADY: boolean; LOADED: boolean };
 
-    readonly flowOptions: Map<string, FlowState>;
+    /** Every flow of the run, by id. Cleared by `reset()`. */
+    readonly flows: Map<string, Flow>;
     /** How each settled process ended, by prefixed id. Cleared by `reset()`. */
     readonly processStates: Map<string, Outcome>;
     logger: Logger | null;
 
     init(): Promise<this>;
     use<Args extends unknown[]>(plugin: Plugin<Args>, ...args: Args): this;
-    /** `flowId`: a name, `true` for the built-in ordered flow, or nothing for the default flow. */
-    add(config: ProcessConfig, flowId?: string | true | null): this;
+    /** `flowId`: a name (a number is taken as its string), `true` for the built-in ordered flow, or nothing for the default flow. */
+    add(config: ProcessConfig, flowId?: string | number | true | null): this;
     /** Resolves once every flow has completed. */
+    /** Called again during a run: starts nothing, and resolves with that run. */
     load(options?: { between?: number }): Promise<void>;
-    setFlowOptions(options: FlowOptions, flowId?: string | true | null): this;
+    setFlowOptions(options: FlowOptions, flowId?: string | number | true | null): this;
     registerType(type: string, handler: TypeHandler): this;
     registerTypes(types: TypeDefinition[] | Record<string, TypeHandler>): this;
-    runFlow(flowId: string, withTrigger?: boolean): this;
+    /** Start a paused flow. It still waits for its trigger unless `withTrigger` is `true` (the trigger counts as fired). Before `load()` it only lifts the pause. */
+    runFlow(flowId: string | number | true, withTrigger?: boolean): this;
     pauseGroup(group: string): this;
     runGroup(group: string): this;
     /** The ids of the flows whose `group` option is `group` right now. */
@@ -425,29 +448,22 @@ export interface QSL {
     log(type: string, ...args: unknown[]): void;
     /** A problem; always printed by the logger. */
     error(type: string, ...args: unknown[]): void;
-    setOnAllComplete(callback: () => void): this;
-    useEvents(): this;
+    /** Called at the end of every run, until `destroy()`. */
+    setOnAllComplete(callback: (() => void) | null): this;
+    /** Clear run state. During a run, that run's `load()` resolves and what it still has in flight is ignored. */
     reset(): this;
     destroy(): this;
-    /** Check whether the run is done, for a plugin that held its end back through `completedFlowsActions`. */
-    maybeComplete(): void;
 
     /**
-     * Plugin hooks. A plugin adds functions to these; each runs with the
-     * instance as `this`.
+     * How a plugin extends QSL. Each function runs with the instance as `this`.
+     *
+     * `listeners` observe: everything QSL reports, as it happens (see
+     * `Signal`) — LOAD, the PROCESS_* signals, RESET and the rest. Kept across
+     * runs, cleared by `destroy()`. A listener that keeps anything from a run
+     * should let it go on RESET.
      */
-    readonly initActions: Set<(this: QSL) => void | Promise<void>>;
-    readonly loadActions: Set<(this: QSL) => void>;
-    readonly resetActions: Set<(this: QSL) => void>;
-    readonly processCompleteActions: Set<(this: QSL, process: Process) => void>;
-    /** Everything QSL reports, as it happens; see `Signal`. Kept across runs, cleared by `destroy()`. */
     readonly listeners: Set<Listener>;
-    /** Run once every flow has completed, after `setOnAllComplete()`'s callback. */
-    readonly allCompleteActions: Set<(this: QSL) => void>;
-    readonly addProcessFilters: Set<(this: QSL, flowId: string | true | null, config: ProcessConfig) => [string | true | null, ProcessConfig]>;
-    readonly flowIdFilters: Set<(this: QSL, flowIds: string[]) => string[]>;
-    /** Decide whether the run is done; return `false` to hold its end back and call `maybeComplete()` later. */
-    readonly completedFlowsActions: Set<(this: QSL, done: boolean, flows: Map<string, Process[]>, flowOptions: Map<string, FlowState>) => boolean>;
+    /** Add to what a type handler is given. */
     readonly handlerCallbacksFilters: Set<(this: QSL, process: Process) => Partial<HandlerCallbacks> | void>;
     /** Return `true` when the condition fails, `false` when it passes, `null` when it is not yours. */
     readonly conditionHandlers: Set<(this: QSL, condition: unknown) => boolean | null>;
@@ -512,5 +528,9 @@ declare global {
         'QSL:error': ProcessErrorEvent;
         'QSL:skipped': ProcessSkippedEvent;
         'QSL:all:completed': CustomEvent<undefined>;
+        'QSL:flow:started': FlowEvent;
+        'QSL:flow:completed': FlowEvent;
+        'QSL:flow:error': FlowEvent;
+        'QSL:flow:skipped': FlowSkippedEvent;
     }
 }

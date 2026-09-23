@@ -104,36 +104,25 @@ describe('render, shared by every type', () => {
         expect(document.querySelectorAll('script').length).toBe(0);
     });
 
-    it('awaits onBeforeStart, then waits `delay`, then inserts', async () => {
-        const order = [];
-        const done = Script.handler(base({
+    it('leaves onBeforeStart and delay to the core: a handler inserts at once', async () => {
+        const called = [];
+        await Script.handler(base({
             src: '/a.js',
-            delay: 30,
-            onBeforeStart: async () => {
-                await new Promise((r) => setTimeout(r, 10));
-                order.push('before');
-            },
-            onComplete: () => order.push('complete'),
+            delay: 1000,
+            onBeforeStart: () => called.push('before'),
         }), {});
 
-        await new Promise((r) => setTimeout(r, 20));
-        expect(order).toEqual(['before']);
-        expect(document.querySelector('script')).toBeNull();
-
-        await done;
-        expect(order).toEqual(['before', 'complete']);
+        expect(called).toEqual([]);
+        expect(document.querySelector('script')).not.toBeNull();
     });
 
-    it('rejects and calls onError when onBeforeStart throws', async () => {
+    it('rejects, and calls onError, when html or shadow has no tag', async () => {
         const errors = [];
-        const result = await Script.handler(base({
-            src: '/a.js',
-            onBeforeStart: () => { throw new Error('nope'); },
-            onError: (e) => errors.push(e.message),
-        }), {}).then(() => 'resolved', (e) => e.message);
+        const result = await HTML.handler(base({ type: 'html', html: '<p>x</p>', onError: (e) => errors.push(e.message) }), {})
+            .then(() => 'resolved', (e) => e.message);
 
-        expect(result).toBe('nope');
-        expect(errors).toEqual(['nope']);
+        expect(result).toBe('The html type needs a tag');
+        expect(errors).toEqual(['The html type needs a tag']);
     });
 
     it.each([

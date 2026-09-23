@@ -18,7 +18,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /**
  * add() works on a copy of the config: read the outcome off the core.
  */
-const reason = (core, id) => core.processIndex.get('qsl-' + id)?.skipReason;
+const reason = (core, id) => core._processIndex.get('qsl-' + id)?.skipReason;
 
 async function setup() {
     const core = await freshCore();
@@ -226,9 +226,9 @@ describe('dependencies that do not exist', () => {
         expect(ran).toEqual(['loose']);
     });
 
-    it('a flow after a flow whose dependency does not exist is not left waiting', async () => {
+    it('a flow after a strict flow whose dependency does not exist is not left waiting', async () => {
         const { core, ran, errors } = await setup();
-        core.setFlowOptions({ depends: ['ghostflow'] }, 'missing');
+        core.setFlowOptions({ depends: ['ghostflow'], strict: true }, 'missing');
         core.setFlowOptions({ depends: ['missing'] }, 'after');
         core.add({ id: 'm', type: 'mark' }, 'missing');
         core.add({ id: 'a', type: 'mark' }, 'after');
@@ -236,7 +236,49 @@ describe('dependencies that do not exist', () => {
         expect(await within(core.load())).toBe('resolved');
         expect(core.processStates.get('qsl-m')).toBe('skipped');
         expect(ran).toEqual(['a']);
-        expect(errors).toContain('FLOW_DEP_SKIPPED');
+        expect(errors).toContain('DEP_NOT_FOUND');
+    });
+});
+
+describe('flow dependencies cleared or left empty', () => {
+    it('depends: null or undefined is no dependency at all', async () => {
+        const { core, ran, errors } = await setup();
+        core.add({ id: 'a', type: 'mark' }, 'A');
+        core.setFlowOptions({ depends: undefined }, 'A');
+        core.add({ id: 'b', type: 'mark' }, 'B');
+        core.setFlowOptions({ depends: null }, 'B');
+
+        expect(await within(core.load())).toBe('resolved');
+        expect(ran.sort()).toEqual(['a', 'b']);
+        expect(core.flows.get('A').options.depends).toEqual([]);
+        expect(errors).toEqual([]);
+    });
+
+    it.each([[[]], [null], [undefined]])('a flow whose dependencies are cleared during the run (%j) starts', async (deps) => {
+        const { core, ran } = await setup();
+        core.add({ id: 'a', type: 'slow', ms: 40 }, 'A');
+        core.setFlowOptions({ depends: ['A'] }, 'B');
+        core.add({ id: 'b', type: 'mark' }, 'B');
+        const loading = core.load();
+        await sleep(5);
+        core.setFlowOptions({ depends: deps }, 'B');
+
+        expect(await within(loading)).toBe('resolved');
+        expect(ran).toEqual(['b', 'a']);
+    });
+
+    it('a late flow whose dependencies are cleared starts in its turn', async () => {
+        const { core, ran } = await setup();
+        core.registerType('adder', () => {
+            core.setFlowOptions({ depends: ['never'], paused: false }, 'late');
+            core.add({ id: 'l', type: 'mark' }, 'late');
+            core.setFlowOptions({ depends: [] }, 'late');
+        });
+        core.add({ id: 'adder', type: 'adder' });
+        core.add({ id: 's', type: 'slow', ms: 20 }, 'other');
+
+        expect(await within(core.load())).toBe('resolved');
+        expect(ran).toEqual(['s', 'l']);
     });
 });
 

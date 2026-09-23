@@ -139,7 +139,6 @@ window.QSLReady = function () {
   /**
    * Demo plumbing: log how each process settled.
    */
-  qsl.useEvents();
   window.addEventListener('QSL:completed', function (e) {
     window.demoNote(e.detail.id.replace(/^qsl-/, ''), 'completed', 'completed');
   });
@@ -227,8 +226,8 @@ window.QSLReady = function () {
     addTagsFor(route);
 
     /**
-     * reset() clears the completion callback along with the rest of the
-     * run state, so it is set again for every run.
+     * The completion callback lasts until destroy(); setting it again for
+     * every run lets it name the run it belongs to.
      */
     qsl.setOnAllComplete(function () {
       window.demoNote('qsl', 'run #' + thisRun + ' complete, state reset for the next route', 'run');

@@ -24,7 +24,7 @@
                                      'network:fast' (condition) and
                                      'scroll:60' (trigger)
     setLogger()                      QSL's own log, into the panel on the page
-    useEvents()                      timings per process, for your monitoring
+    QSL:* events                     timings per process, for your monitoring
     autoReset = false                inspect flow state after the run
 
   Plus the flow controls that only make sense with something to click:
@@ -94,7 +94,7 @@
   <p class="hint">Only readable because <code>autoReset</code> is off. Filled in when the run completes.</p>
   <div class="scroll">
     <table>
-      <thead><tr><th>flow</th><th>status</th><th>outcome</th></tr></thead>
+      <thead><tr><th>flow</th><th>phase</th><th>outcome</th></tr></thead>
       <tbody id="flows"><tr><td colspan="3">run still in progress…</td></tr></tbody>
     </table>
   </div>
@@ -217,7 +217,6 @@ window.QSLReady = function () {
    */
   var t0 = performance.now();
   var timings = {};
-  qsl.useEvents();
   ['started', 'completed', 'error', 'skipped'].forEach(function (name) {
     window.addEventListener('QSL:' + name, function (e) {
       var id = e.detail.id.replace(/^qsl-/, '');
@@ -246,8 +245,8 @@ window.QSLReady = function () {
   qsl.autoReset = false;
   window.addEventListener('QSL:all:completed', function () {
     var html = '';
-    qsl.flowOptions.forEach(function (options, flowId) {
-      html += '<tr><td>' + flowId + '</td><td>' + options.status + '</td><td>' + (options.outcome || '') + '</td></tr>';
+    qsl.flows.forEach(function (flow, flowId) {
+      html += '<tr><td>' + flowId + '</td><td>' + flow.phase + '</td><td>' + (flow.outcome || '') + '</td></tr>';
     });
     document.getElementById('flows').innerHTML = html;
     document.getElementById('reset').disabled = false;

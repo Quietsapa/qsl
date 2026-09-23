@@ -22,7 +22,6 @@ const hang = () => new Promise(() => {});
 const slow = (process) => new Promise((resolve) => setTimeout(resolve, process.wait || 0));
 
 function record(core) {
-    core.useEvents();
     const events = [];
     const listeners = ['started', 'completed', 'error', 'skipped'].map((name) => {
         const fn = (e) => events.push({ name, id: e.detail.id, reason: e.detail.reason, error: e.detail.error });

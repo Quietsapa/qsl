@@ -179,7 +179,7 @@ describe('guards', () => {
     it('setFlowOptions() with something other than an object only creates the flow', async () => {
         const core = await freshCore();
         core.setFlowOptions(null, 'f');
-        expect(core.flowOptions.get('f').status).toBe('READY');
+        expect(core.flows.get('f').phase).toBe('ready');
     });
 
     it('maybeComplete() outside a run does nothing', async () => {
@@ -192,8 +192,7 @@ describe('guards', () => {
 
     it('non-functions among the plugin hooks are skipped', async () => {
         const { core, ran } = await setup();
-        for (const hooks of [core.loadActions, core.addProcessFilters, core.flowIdFilters, core.processCompleteActions,
-            core.allCompleteActions, core.resetActions, core.handlerCallbacksFilters, core.triggerHandlers]) {
+        for (const hooks of [core.handlerCallbacksFilters, core.conditionHandlers, core.triggerHandlers]) {
             hooks.add(42);
         }
         core.handlerCallbacksFilters.add(() => null);

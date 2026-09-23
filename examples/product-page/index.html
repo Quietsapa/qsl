@@ -148,7 +148,6 @@ window.QSLReady = function () {
   /**
    * Demo plumbing: tick off the board as processes complete.
    */
-  qsl.useEvents();
   window.addEventListener('QSL:completed', function (e) {
     var item = document.getElementById('b-' + e.detail.id.replace(/^qsl-/, ''));
     if (!item) return;

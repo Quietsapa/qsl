@@ -11,54 +11,57 @@ const describe = (arg) => {
 
 export default function(QSL) {
 
-    QSL.initActions.add(function() {
-        
-        QSL.logger = {
-            VERSION: 'qsl-logger',
-            LOG: {
-                LOAD: '[QSL] Loading started',
-                PROCESS_ADDED: '[QSL] Process added:',
-                PROCESS_TRIGGERED: '[QSL] Process triggered:',
-                PROCESS_RESOLVED: '[QSL] Process dependencies settled:',
-                PROCESS_STARTED: '[QSL] Process started:',
-                PROCESS_COMPLETED: '[QSL] Process completed:',
-                PROCESS_FAILED: '[QSL] Process failed:',
-                PROCESS_SKIPPED: '[QSL] Process skipped:',
-                PROCESS_RETRY: '[QSL] Process failed, retrying (attempt):',
-                FLOW_STARTED: '[QSL] Flow started:',
-                FLOW_COMPLETED: '[QSL] Flow completed:',
-                FLOW_SKIPPED: '[QSL] Flow skipped:',
-                PRELOAD_ERROR: '[QSL] Preload error:',
-                CONDITION_FAILED: '[QSL] Condition threw, treated as failed:',
-                TRIGGER_FAILED: '[QSL] Trigger threw, released:',
-                CALLBACK_FAILED: '[QSL] Callback threw:',
-                LISTENER_FAILED: '[QSL] Listener threw:',
-                FLOW_DEP_SKIPPED: '[QSL] Flow dependency missed:',
-                DEP_NOT_FOUND: '[QSL] Dependency not found:',
-                LATE_ADD: '[QSL] Added to a flow that has already started, runs in a late flow:',
-                CIRC_FLOW_DEP_SKIPPED: '[QSL] Circular flow dependency skipped:',
-                CIRC_PROCESS_DEP_SKIPPED: '[QSL] Circular process dependency skipped:',
-                RESET: '[QSL] Global reset',
-                ALL_COMPLETED: '[QSL] Loading is completed',
-            },
+    QSL.logger = {
+        VERSION: 'qsl-logger',
+        LOG: {
+            LOAD: '[QSL] Loading started',
+            MESSAGE: '[QSL]',
+            PROCESS_ADDED: '[QSL] Process added:',
+            PROCESS_TRIGGERED: '[QSL] Process triggered:',
+            PROCESS_RESOLVED: '[QSL] Process dependencies settled:',
+            PROCESS_STARTED: '[QSL] Process started:',
+            PROCESS_COMPLETED: '[QSL] Process completed:',
+            PROCESS_FAILED: '[QSL] Process failed:',
+            PROCESS_SKIPPED: '[QSL] Process skipped:',
+            PROCESS_RETRY: '[QSL] Process failed, retrying (attempt):',
+            FLOW_STARTED: '[QSL] Flow started:',
+            FLOW_COMPLETED: '[QSL] Flow completed:',
+            FLOW_FAILED: '[QSL] Flow failed:',
+            FLOW_SKIPPED: '[QSL] Flow skipped:',
+            PRELOAD_ERROR: '[QSL] Preload error:',
+            CONDITION_FAILED: '[QSL] Condition threw, treated as failed:',
+            TRIGGER_FAILED: '[QSL] Trigger threw, released:',
+            CALLBACK_FAILED: '[QSL] Callback threw:',
+            LISTENER_FAILED: '[QSL] Listener threw:',
+            DEP_NOT_FOUND: '[QSL] Dependency not found:',
+            DUPLICATE_ID: '[QSL] Two processes in one run share an id:',
+            UNKNOWN_CONDITION: '[QSL] Condition nothing knows, passes:',
+            UNKNOWN_TRIGGER: '[QSL] Trigger nothing knows, fires at once:',
+            LATE_ADD: '[QSL] Added to a flow that has already started, runs in a late flow:',
+            CIRC_FLOW_DEP_SKIPPED: '[QSL] Circular flow dependency skipped:',
+            CIRC_PROCESS_DEP_SKIPPED: '[QSL] Circular process dependency skipped:',
+            RESET: '[QSL] Global reset',
+            ALL_COMPLETED: '[QSL] Loading is completed',
+        },
+        /**
+         * QSL's own progress, the keys in LOG, is printed only with
+         * `qsl.debug = true`: on a live page nobody wants a line per
+         * process. Anything else, such as the `message` of a console
+         * process, was asked for and is always printed.
+         */
+        log(type, ...args) {
             /**
-             * QSL's own progress, the keys in LOG, is printed only with
-             * `qsl.debug = true`: on a live page nobody wants a line per
-             * process. Anything else, such as the `message` of a console
-             * process, was asked for and is always printed.
+             * The message of a console process, as it was written.
              */
-            log(type, ...args) {
-                if (this.LOG[type]) {
-                    if (QSL.debug) console.log(this.LOG[type], ...args.map(describe));
-                } else {
-                    console.log('[QSL] ' + type, ...args.map(describe));
-                }
-            },
-            error(type, ...args) {
-                console.error(this.LOG[type] || '[QSL] ' + type, ...args.map(describe));
+            if (type === 'MESSAGE') return console.log('[QSL] ' + args[1]);
+            if (this.LOG[type]) {
+                if (QSL.debug) console.log(this.LOG[type], ...args.map(describe));
+            } else {
+                console.log('[QSL] ' + type, ...args.map(describe));
             }
-        };
-        
-    });
-
+        },
+        error(type, ...args) {
+            console.error(this.LOG[type] || '[QSL] ' + type, ...args.map(describe));
+        }
+    };
 }

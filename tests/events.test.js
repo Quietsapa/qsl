@@ -64,6 +64,70 @@ describe('events plugin', () => {
         expect(hits).toEqual(['listener-0']);
     });
 
+    it('keeps nothing from a run: not after many runs, not after one cut short', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const hits = [];
+        registerVendorType(core, 'DOMContentLoaded', hits, 1);
+        const vendor = core.types.get('vendor');
+
+        const listeners = core.listeners.size;
+        for (let i = 0; i < 50; i++) {
+            core.add({ id: 'vendor', type: 'vendor' });
+            await core.load();
+        }
+        expect(hits).toHaveLength(50);
+        expect(core._customEvents.size).toBe(0);
+        expect(core.listeners.size).toBe(listeners);
+
+        /**
+         * A process still running when its run is reset never settles: what
+         * it recorded goes with the run.
+         */
+        core.registerType('stuck', (process, callbacks) => {
+            vendor(process, callbacks);
+            return new Promise(() => {});
+        });
+        core.add({ id: 'stuck', type: 'stuck' });
+        const loading = core.load();
+        await new Promise((r) => setTimeout(r, 10));
+        expect(core._customEvents.size).toBe(1);
+        core.reset();
+        await loading;
+        expect(core._customEvents.size).toBe(0);
+    });
+
+    it('lets the browser drop a renamed listener once its event is dispatched', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const hits = [];
+        registerVendorType(core, 'DOMContentLoaded', hits, 1);
+
+        /**
+         * An own method under the plugin's patch sees what reaches the
+         * browser: the renamed type and the options.
+         */
+        const seen = [];
+        const native = document.addEventListener;
+        document.addEventListener = function (type, listener, opts) {
+            seen.push([type, opts]);
+            return native.call(this, type, listener, opts);
+        };
+        try {
+            core.add({ id: 'vendor', type: 'vendor' });
+            await core.load();
+        } finally {
+            delete document.addEventListener;
+        }
+
+        const [type, opts] = seen.find(([t]) => t.startsWith('DOMContentLoaded:'));
+        expect(opts).toEqual({ capture: false, once: true });
+        document.dispatchEvent(new Event(type));
+        expect(hits).toEqual(['listener-0']);
+    });
+
     it('runs each of several listeners from one process exactly once', async () => {
         const core = await freshCore();
         core.use(events);

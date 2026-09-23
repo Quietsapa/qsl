@@ -101,7 +101,6 @@ describe('yield', () => {
         globalThis.scheduler = { yield: () => new Promise((r) => setTimeout(r, 500)) };
         const { core, log } = await setup();
         const errors = [];
-        core.useEvents();
         const onError = (e) => errors.push(e.detail.id);
         window.addEventListener('QSL:error', onError);
         core.add({ id: 'a', type: 'mark', timeout: 100 });

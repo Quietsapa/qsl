@@ -132,7 +132,7 @@ the page, per-process timings from the lifecycle events, and a deliberately
 misconfigured block showing what QSL does with a dependency cycle, a typo in
 a dependency and an unknown type.
 
-Covers: `registerType`, `use`, `setLogger`, `useEvents`, `autoReset`,
+Covers: `registerType`, `use`, `setLogger`, the `QSL:*` events, `autoReset`,
 `reset`, `runFlow` on a paused flow, `priority`, dependency cycles.
 
 ## Ideas not written up yet

@@ -32,19 +32,44 @@ const MAX_PROCESSES = 8;
 const flowName = (i) => 'f' + i;
 const processName = (i) => 'p' + i;
 
-const trigger = fc.oneof(
-    { weight: 6, arbitrary: fc.constant(null) },
+const simpleTrigger = fc.oneof(
     { weight: 2, arbitrary: fc.constant({ kind: 'now' }) },
     { weight: 2, arbitrary: fc.record({ kind: fc.constant('later'), ms: fc.integer({ min: 1, max: 80 }) }) },
     { weight: 1, arbitrary: fc.constant({ kind: 'twice' }) },
     { weight: 1, arbitrary: fc.constant({ kind: 'throws' }) },
 );
 
+/**
+ * A trigger: none, one, or several combined — all of them (an array) or the
+ * first of them (`or`).
+ */
+const trigger = fc.oneof(
+    { weight: 12, arbitrary: fc.constant(null) },
+    { weight: 6, arbitrary: simpleTrigger },
+    { weight: 1, arbitrary: fc.record({ kind: fc.constant('all'), parts: fc.array(simpleTrigger, { minLength: 1, maxLength: 3 }) }) },
+    { weight: 1, arbitrary: fc.record({ kind: fc.constant('any'), parts: fc.array(simpleTrigger, { minLength: 1, maxLength: 3 }) }) },
+);
+
+/**
+ * A condition: none, a fixed answer, or one that changes during the run —
+ * passing until a moment, or only from a moment on.
+ */
 const condition = fc.oneof(
-    { weight: 8, arbitrary: fc.constant(null) },
+    { weight: 12, arbitrary: fc.constant(null) },
     { weight: 2, arbitrary: fc.constant(true) },
     { weight: 2, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.record({ kind: fc.constant('until'), ms: fc.integer({ min: 1, max: 120 }) }) },
+    { weight: 1, arbitrary: fc.record({ kind: fc.constant('from'), ms: fc.integer({ min: 1, max: 120 }) }) },
 );
+
+const beforeStart = fc.oneof(
+    { weight: 8, arbitrary: fc.constant(null) },
+    { weight: 1, arbitrary: fc.constant({ kind: 'sync' }) },
+    { weight: 1, arbitrary: fc.record({ kind: fc.constant('async'), ms: fc.integer({ min: 1, max: 40 }) }) },
+    { weight: 1, arbitrary: fc.constant({ kind: 'throws' }) },
+);
+
+const maybeMs = (max) => fc.oneof({ weight: 4, arbitrary: fc.constant(undefined) }, { weight: 1, arbitrary: fc.constant(0) }, { weight: 2, arbitrary: fc.integer({ min: 1, max }) });
 
 const maybeBool = fc.oneof(fc.constant(undefined), fc.boolean());
 
@@ -77,6 +102,8 @@ const processSpec = (processNames, flowCount) => fc.record({
     timeout: fc.oneof(fc.constant(undefined), fc.constant(0), fc.integer({ min: 5, max: 100 })),
     retries: fc.oneof(fc.constant(undefined), fc.integer({ min: 0, max: 2 })),
     retryDelay: fc.oneof(fc.constant(undefined), fc.integer({ min: 0, max: 20 })),
+    delay: maybeMs(50),
+    beforeStart,
     late: fc.option(fc.record({
         flow: fc.oneof(fc.integer({ min: 0, max: flowCount - 1 }), fc.constant('new')),
         behaviour,
@@ -97,6 +124,17 @@ const flowSpec = (flowNames) => fc.record({
     trigger,
     timeout: fc.oneof(fc.constant(undefined), fc.integer({ min: 5, max: 100 })),
     retries: fc.oneof(fc.constant(undefined), fc.integer({ min: 0, max: 2 })),
+    delay: maybeMs(60),
+    between: fc.oneof({ weight: 4, arbitrary: fc.constant(undefined) }, { weight: 1, arbitrary: fc.constant(null) }, { weight: 1, arbitrary: fc.constant(0) }, { weight: 2, arbitrary: fc.integer({ min: 1, max: 30 }) }),
+    priority: fc.integer({ min: -2, max: 2 }),
+    /**
+     * Paused at first, and released by runGroup() at `releaseAt`.
+     */
+    releaseAt: fc.option(fc.integer({ min: 1, max: 100 }), { freq: 5 }),
+    /**
+     * Paused with pauseGroup() during the run, for a while, then released.
+     */
+    pauseWindow: fc.option(fc.record({ at: fc.integer({ min: 0, max: 80 }), for: fc.integer({ min: 1, max: 60 }) }), { freq: 6 }),
 });
 
 const configuration = fc
@@ -107,6 +145,7 @@ const configuration = fc
         return fc.record({
             strict: fc.boolean(),
             timeout: fc.oneof(fc.constant(0), fc.integer({ min: 20, max: 200 })),
+            between: fc.oneof({ weight: 3, arbitrary: fc.constant(undefined) }, { weight: 1, arbitrary: fc.integer({ min: 1, max: 20 }) }),
             flows: fc.array(flowSpec(flowNames), { minLength: flows, maxLength: flows }),
             processes: fc.array(processSpec(processNames, flows), { minLength: processes, maxLength: processes }),
         });
@@ -135,7 +174,44 @@ function triggerFor(spec) {
     if (spec.kind === 'now') return (release) => release();
     if (spec.kind === 'later') return (release) => setTimeout(release, spec.ms);
     if (spec.kind === 'twice') return (release) => { release(); setTimeout(release, 5); };
+    if (spec.kind === 'all') return spec.parts.map(triggerFor);
+    if (spec.kind === 'any') return { operator: 'or', triggers: spec.parts.map(triggerFor) };
     return () => { throw new Error('trigger threw'); };
+}
+
+/**
+ * How long after it is armed a trigger fires: the longest of an array, the
+ * shortest of an `or`; a trigger that throws is released at once.
+ */
+function triggerDelay(spec) {
+    if (!spec) return 0;
+    if (spec.kind === 'later') return spec.ms;
+    if (spec.kind === 'all') return Math.max(...spec.parts.map(triggerDelay));
+    if (spec.kind === 'any') return Math.min(...spec.parts.map(triggerDelay));
+    return 0;
+}
+
+function conditionFor(spec, loadAt) {
+    if (spec == null) return undefined;
+    if (typeof spec === 'boolean') return spec;
+    if (spec.kind === 'until') return () => Date.now() - loadAt.value < spec.ms;
+    return () => Date.now() - loadAt.value >= spec.ms;
+}
+
+/**
+ * Whether a condition passes at a moment, ms after load().
+ */
+function conditionHolds(spec, t) {
+    if (spec == null || spec === true) return true;
+    if (spec === false) return false;
+    return spec.kind === 'until' ? t < spec.ms : t >= spec.ms;
+}
+
+function beforeStartFor(spec) {
+    if (!spec) return undefined;
+    if (spec.kind === 'sync') return () => {};
+    if (spec.kind === 'async') return () => new Promise((r) => setTimeout(r, spec.ms));
+    return () => { throw new Error('onBeforeStart threw'); };
 }
 
 async function run(config) {
@@ -144,6 +220,7 @@ async function run(config) {
     core.strict = config.strict;
     core.timeout = config.timeout;
     core.autoReset = false;
+    const loadAt = { value: Date.now() };
 
     let seq = 0;
     const log = {
@@ -152,7 +229,13 @@ async function run(config) {
         settles: new Map(),
         added: new Map(),
         startedAt: new Map(),
+        flowStarted: new Map(),
+        flowEnded: new Map(),
     };
+    core.listeners.add(({ type, flow, time }) => {
+        if (type === 'FLOW_STARTED') log.flowStarted.set(flow, Date.now());
+        if (type === 'FLOW_COMPLETED' || type === 'FLOW_FAILED' || type === 'FLOW_SKIPPED') log.flowEnded.set(flow, Date.now());
+    });
 
     core.registerType('fuzz', (p) => {
         const id = p.id;
@@ -187,9 +270,13 @@ async function run(config) {
         throw new Error('handler threw');
     });
 
-    core.processCompleteActions.add(function (process) {
+    /**
+     * Settles, from the stream: each is emitted once the state is recorded.
+     */
+    core.listeners.add(function ({ type, process }) {
+        if (!/^PROCESS_(COMPLETED|FAILED|SKIPPED)$/.test(type)) return;
         const entry = log.settles.get(process.id) || [];
-        entry.push({ seq: ++seq, at: Date.now(), outcome: this.processStates.get(process.id) ?? outcomeOf(process), reason: process.skipReason || null });
+        entry.push({ seq: ++seq, at: Date.now(), outcome: this.processStates.get(process.id), reason: process.skipReason || null });
         log.settles.set(process.id, entry);
     });
 
@@ -198,38 +285,43 @@ async function run(config) {
             ordered: f.ordered,
             strict: f.strict,
             depends: f.depends,
-            condition: f.condition ?? undefined,
+            condition: conditionFor(f.condition, loadAt),
             trigger: triggerFor(f.trigger),
             timeout: f.timeout,
             retries: f.retries,
+            delay: f.delay,
+            between: f.between,
+            priority: f.priority,
+            paused: f.releaseAt != null,
+            group: 'g' + i,
         }, flowName(i));
     });
     config.processes.forEach((p, i) => {
         const processConfig = {
             id: processName(i), type: 'fuzz', behaviour: p.behaviour,
-            depends: p.depends, strict: p.strict, condition: p.condition ?? undefined,
+            depends: p.depends, strict: p.strict, condition: conditionFor(p.condition, loadAt),
             trigger: triggerFor(p.trigger), priority: p.priority,
             timeout: p.timeout, retries: p.retries, retryDelay: p.retryDelay, late: p.late,
+            delay: p.delay, onBeforeStart: beforeStartFor(p.beforeStart),
         };
-        log.added.set('qsl-' + processName(i), { ...processConfig, flow: flowName(p.flow) });
+        log.added.set('qsl-' + processName(i), { ...processConfig, spec: p, flow: flowName(p.flow) });
         core.add(processConfig, flowName(p.flow));
     });
 
     let resolved = false;
-    log.loadAt = Date.now();
-    core.load().then(() => { resolved = true; });
+    log.loadAt = loadAt.value = Date.now();
+    config.flows.forEach((f, i) => {
+        if (f.releaseAt != null) setTimeout(() => core.runGroup('g' + i), f.releaseAt);
+        if (f.pauseWindow) {
+            setTimeout(() => core.pauseGroup('g' + i), f.pauseWindow.at);
+            setTimeout(() => core.runGroup('g' + i), f.pauseWindow.at + f.pauseWindow.for);
+        }
+    });
+    core.load(config.between === undefined ? undefined : { between: config.between }).then(() => { resolved = true; });
     for (let i = 0; i < 200 && !resolved; i++) await vi.advanceTimersByTimeAsync(500);
 
     vi.useRealTimers();
     return { core, log, resolved };
-}
-
-/**
- * processStates is written after the hooks run; read the outcome off the
- * process for the hook's own record.
- */
-function outcomeOf(process) {
-    return process.skipped ? 'skipped' : undefined;
 }
 
 /**
@@ -357,8 +449,21 @@ function check(config, { core, log, resolved }) {
          * 5. A failing condition, on the process or its flow, keeps it from
          *    running.
          */
-        if (p.condition === false && ran) fail(`${id} ran with a failing condition`);
+        /**
+         * The last check comes right before onBeforeStart, which may take
+         * a while of its own.
+         */
+        const checkedMs = log.startedAt.get(id) - log.loadAt - (p.spec?.beforeStart?.kind === 'async' ? p.spec.beforeStart.ms : 0);
+        if (ran && p.spec && !conditionHolds(p.spec.condition, checkedMs)) fail(`${id} ran with its condition failing at ${checkedMs} ms`);
+        if (ran && !p.isLate && flow && log.flowStarted.has(p.flow) && !conditionHolds(flow.condition, log.flowStarted.get(p.flow) - log.loadAt)) {
+            fail(`${id} ran in a flow that started with its condition failing`);
+        }
         if (flow?.condition === false && !p.isLate && ran) fail(`${id} ran in a flow whose condition fails`);
+
+        /**
+         * 5b. onBeforeStart that throws fails the process before it starts.
+         */
+        if (p.spec?.beforeStart?.kind === 'throws' && ran) fail(`${id} started though its onBeforeStart threw`);
 
         /**
          * 6. A strict process never runs after a dependency failed or was
@@ -413,33 +518,61 @@ function check(config, { core, log, resolved }) {
     });
 
     /**
-     * 10. Nothing waits longer than it has to. Where nothing but `depends`
-     *     and order holds a process back (no trigger on it or its flow, and
-     *     its flow depends on no other flow), it starts in the very
-     *     millisecond the last of them settles. Left out: the late process,
-     *     whose moment depends on when it was added, whatever depends on it,
-     *     and ordered flows it may have joined; and runs where
-     *     scheduler.yield() adds a task per process.
+     * 10. Everything starts in the very millisecond it may, never later.
+     *
+     *     A flow starts once it is released (load(), or runGroup() for a
+     *     paused one), the flows it depends on have ended and its trigger
+     *     has fired, plus its `delay`. A process is armed when its flow
+     *     starts — `between` × its place later in an unordered flow, or when
+     *     the one before it settles (plus `between`) in an ordered one — and
+     *     starts once its trigger has fired after that and its dependencies
+     *     have settled, plus its `delay` and its onBeforeStart.
+     *
+     *     Left out: the late process and flows it joined, whatever depends
+     *     on it, flows on a flow cycle; and runs where scheduler.yield() adds
+     *     a task per process.
      */
     if (!globalThis.scheduler?.yield) {
         const lateJoined = new Set(config.processes.filter((p) => p.late && p.late.flow !== 'new').map((p) => flowName(p.late.flow)));
         const settledAt = (id) => log.settles.get(id)?.[0]?.at;
+        const strictOf = (p, f) => (p.strict ?? f.strict ?? config.strict) === true;
         config.flows.forEach((f, i) => {
             const name = flowName(i);
-            if (f.trigger || f.depends.length || flowCycles.has(name)) return;
+            if (flowCycles.has(name) || f.pauseWindow) return;
+            const F = log.flowStarted.get(name);
+            if (F !== undefined) {
+                const depsEnd = f.depends.filter((d) => flowSpecs.has(d)).map((d) => log.flowEnded.get(d));
+                if (!depsEnd.includes(undefined)) {
+                    const released = Math.max(log.loadAt, f.releaseAt != null ? log.loadAt + f.releaseAt : -Infinity, ...depsEnd);
+                    const expected = released + triggerDelay(f.trigger) + (f.delay > 0 ? f.delay : 0);
+                    if (F !== expected) fail(`flow ${name} started at ${F - log.loadAt} ms, expected ${expected - log.loadAt} ms`);
+                }
+            }
+            if (F === undefined || lateJoined.has(name)) return;
+            const between = f.between != null ? f.between : (config.between || 0);
             const members = [...log.added].filter(([, p]) => p.flow === name && !p.isLate)
                 .map(([id, p]) => ({ id, p }))
                 .sort((a, b) => (b.p.priority || 0) - (a.p.priority || 0));
+            let broken = false;
             members.forEach(({ id, p }, k) => {
-                if (!log.startedAt.has(id) || p.trigger || (p.depends || []).includes('late')) return;
-                const waits = (p.depends || []).map((d) => 'qsl-' + d).filter((d) => log.added.has(d) && d !== id);
-                if (f.ordered) {
-                    if (lateJoined.has(name)) return;
-                    if (k > 0) waits.push(members[k - 1].id);
+                let armed;
+                if (!f.ordered) {
+                    armed = F + (k > 0 && between ? k * between : 0);
+                } else {
+                    const chainSkip = broken && strictOf(p, f);
+                    armed = k === 0 ? F : settledAt(members[k - 1].id) + (!chainSkip && between ? between : 0);
                 }
-                const expected = Math.max(log.loadAt, ...waits.map(settledAt));
+                if (f.ordered) {
+                    const s = log.settles.get(id)?.[0];
+                    if (s && s.reason !== 'condition') broken = s.outcome !== 'completed';
+                }
+                if (!log.startedAt.has(id) || (p.depends || []).includes('late')) return;
+                const deps = (p.depends || []).map((d) => 'qsl-' + d).filter((d) => log.added.has(d) && d !== id).map(settledAt);
+                const released = Math.max(armed + triggerDelay(p.spec.trigger), ...deps);
+                const before = p.spec.beforeStart?.kind === 'async' ? p.spec.beforeStart.ms : 0;
+                const expected = released + (p.delay > 0 ? p.delay : 0) + before;
                 const actual = log.startedAt.get(id);
-                if (actual !== expected) fail(`${id} started at ${actual - log.loadAt} ms, ${actual - expected} ms after it could have`);
+                if (actual !== expected) fail(`${id} started at ${actual - log.loadAt} ms, expected ${expected - log.loadAt} ms`);
             });
         });
     }

@@ -14,7 +14,6 @@
 <script>
   var qsl = window.__QSL__;
   window.outcomes = {};
-  qsl.useEvents();
   ['completed', 'error'].forEach(function (name) {
     window.addEventListener('QSL:' + name, function (e) {
       window.outcomes[e.detail.id.replace(/^qsl-/, '')] = name;

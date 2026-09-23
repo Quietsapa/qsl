@@ -359,13 +359,13 @@ describe('media trigger, edge cases', () => {
     it.each([
         ['an empty query', 'media:', true],
         ['no matchMedia', 'media:(min-width: 1px)', false],
-    ])('marks the process skipped with %s', (_, opt, hasMatchMedia) => {
+    ])('fires at once with %s, and leaves the process alone', (_, opt, hasMatchMedia) => {
         if (!hasMatchMedia) vi.stubGlobal('matchMedia', undefined);
         const process = {};
         let fired = false;
         resolveTrigger(mediaQueryTrigger, opt, process)(() => { fired = true; });
         expect(fired).toBe(true);
-        expect(process.skipped).toBe(true);
+        expect(process.skipped).toBeUndefined();
     });
 });
 

@@ -27,9 +27,8 @@ const names = (text) => [...new Set([...text.matchAll(/`(\w+)/g)].map((m) => m[1
 describe('README and types agree', () => {
     it('on flow options', () => {
         const table = readme.slice(readme.indexOf('| Option | Default | Meaning |'), readme.indexOf('### Other methods'));
-        const documented = [...table.matchAll(/^\| `(\w+)` \|/gm)].map((m) => m[1]);
-        const declared = fields('FlowOptions').filter((f) => !['beforeStart', 'onComplete'].includes(f));
-        expect(documented.sort()).toEqual(declared.sort());
+        const documented = [...table.matchAll(/^\| ([^|]+) \|/gm)].flatMap((m) => names(m[1])).filter((f) => f !== 'Option');
+        expect(documented.sort()).toEqual(fields('FlowOptions').sort());
     });
 
     it('on the fields every process has', () => {

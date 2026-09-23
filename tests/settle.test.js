@@ -13,7 +13,6 @@ const within = (promise, ms = 500) => Promise.race([
 ]);
 
 function record(core) {
-    core.useEvents();
     const events = [];
     const listeners = ['started', 'completed', 'error', 'skipped'].map((name) => {
         const fn = (e) => events.push({ name, id: e.detail.id, reason: e.detail.reason, error: e.detail.error });
@@ -455,7 +454,7 @@ describe('code that throws does not hang the run', () => {
         const core = await freshCore();
         const boom = () => { throw new Error('boom'); };
 
-        core.setFlowOptions({ beforeStart: boom, onComplete: boom }, 'tags');
+        core.setFlowOptions({ onBeforeStart: boom, onComplete: boom, onError: boom }, 'tags');
         core.add({ id: 'x', onComplete: boom }, 'tags');
         expect(await within(core.load())).toBe('resolved');
     });
