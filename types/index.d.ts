@@ -339,6 +339,36 @@ export interface Logger {
 }
 
 /**
+ * What QSL reports, as it happens.
+ */
+export type SignalType =
+    | 'LOAD' | 'RESET' | 'ALL_COMPLETED' | 'LATE_ADD'
+    | 'PROCESS_ADDED' | 'PROCESS_TRIGGERED' | 'PROCESS_RESOLVED' | 'PROCESS_STARTED' | 'PROCESS_RETRY'
+    | 'PROCESS_COMPLETED' | 'PROCESS_FAILED' | 'PROCESS_SKIPPED'
+    | 'FLOW_STARTED' | 'FLOW_COMPLETED' | 'FLOW_SKIPPED'
+    | 'DEP_NOT_FOUND' | 'FLOW_DEP_SKIPPED' | 'CIRC_PROCESS_DEP_SKIPPED' | 'CIRC_FLOW_DEP_SKIPPED'
+    | 'PRELOAD_ERROR' | 'CONDITION_FAILED' | 'TRIGGER_FAILED' | 'CALLBACK_FAILED';
+
+/**
+ * One entry of the stream listeners get. Every process ends with exactly one
+ * of PROCESS_COMPLETED, PROCESS_FAILED (args: [error]) or PROCESS_SKIPPED
+ * (args: [reason]), emitted once its state is in `processStates`.
+ */
+export interface Signal {
+    type: SignalType | (string & {});
+    level: 'info' | 'error';
+    /** `performance.now()` when it was emitted. */
+    time: number;
+    /** The process it concerns, as QSL holds it: read it, do not change it. */
+    process: Process | null;
+    /** The flow it concerns: the process's flow, or the flow itself. */
+    flow: string | null;
+    args: unknown[];
+}
+
+export type Listener = (this: QSL, signal: Signal) => void;
+
+/**
  * ── The instance ────────────────────────────────────────────────────────────
  */
 
@@ -386,6 +416,15 @@ export interface QSL {
     /** The ids of the flows whose `group` option is `group` right now. */
     inGroup(group: string): string[];
     setLogger(logger: Logger): this;
+    /**
+     * Report something to the logger and to every listener. `subject` is the
+     * process or the flow id it concerns, or null.
+     */
+    emit(type: string, level: 'info' | 'error', subject: Process | string | null, ...args: unknown[]): void;
+    /** Progress; printed by the logger only with `debug`. */
+    log(type: string, ...args: unknown[]): void;
+    /** A problem; always printed by the logger. */
+    error(type: string, ...args: unknown[]): void;
     setOnAllComplete(callback: () => void): this;
     useEvents(): this;
     reset(): this;
@@ -401,6 +440,8 @@ export interface QSL {
     readonly loadActions: Set<(this: QSL) => void>;
     readonly resetActions: Set<(this: QSL) => void>;
     readonly processCompleteActions: Set<(this: QSL, process: Process) => void>;
+    /** Everything QSL reports, as it happens; see `Signal`. Kept across runs, cleared by `destroy()`. */
+    readonly listeners: Set<Listener>;
     /** Run once every flow has completed, after `setOnAllComplete()`'s callback. */
     readonly allCompleteActions: Set<(this: QSL) => void>;
     readonly addProcessFilters: Set<(this: QSL, flowId: string | true | null, config: ProcessConfig) => [string | true | null, ProcessConfig]>;

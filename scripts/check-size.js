@@ -17,8 +17,8 @@ import zlib from 'node:zlib';
 const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 
 const budgets = {
-    'dist/qsl.min.js': 10,
-    'dist/qsl.slim.min.js': 6.5,
+    'dist/qsl.min.js': 10.5,
+    'dist/qsl.slim.min.js': 7,
 };
 
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));

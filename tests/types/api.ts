@@ -208,6 +208,22 @@ qsl.processCompleteActions.add(function (process) {
     expectTypeOf(this).toEqualTypeOf<QSL>();
     expectTypeOf(process).toEqualTypeOf<Process>();
 });
+/**
+ * The stream: one object per signal, the process when there is one.
+ */
+qsl.listeners.add(function (signal) {
+    expectTypeOf(this).toEqualTypeOf<QSL>();
+    expectTypeOf(signal.level).toEqualTypeOf<'info' | 'error'>();
+    expectTypeOf(signal.time).toEqualTypeOf<number>();
+    expectTypeOf(signal.process).toEqualTypeOf<Process | null>();
+    expectTypeOf(signal.flow).toEqualTypeOf<string | null>();
+    if (signal.type === 'PROCESS_FAILED') console.log(signal.args[0]);
+});
+qsl.emit('MY_PLUGIN_READY', 'info', null, 1, 2);
+qsl.emit('MY_PLUGIN_BROKE', 'error', 'some-flow');
+// @ts-expect-error: the level is 'info' or 'error'
+qsl.emit('X', 'warn', null);
+
 qsl.conditionHandlers.add((condition) => (condition === 'network:fast' ? !navigator.onLine : null));
 qsl.triggerHandlers.add((trigger) => (trigger === 'scroll:60' ? (release) => release() : null));
 qsl.allCompleteActions.add(function () { expectTypeOf(this).toEqualTypeOf<QSL>(); });

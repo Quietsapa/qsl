@@ -286,6 +286,8 @@ Sets options on a flow, creating it if needed. Merges with previous options.
 - `processStates` — a `Map` of how each settled process ended, by prefixed id:
   `'completed'`, `'failed'` or `'skipped'`. Cleared by `reset()`.
 - `setLogger(logger)` — supply an object with `log()` and `error()`.
+- `listeners` — a `Set` of functions that get everything QSL reports as it
+  happens (see Listening below).
 - `setOnAllComplete(fn)` — callback for the end of a run.
 - `useEvents()` — enable DOM lifecycle events.
 - `reset()` — clear run state. Registered types and plugin handlers survive, so
@@ -448,9 +450,54 @@ import core, { triggers, conditions, logger } from '@quietsapa/qsl';
 core.use(triggers).use(conditions).use(logger);
 ```
 
+## Listening
+
+Everything QSL reports goes through one stream: the logger prints it, and
+each function in `listeners` gets it as one object.
+
+```js
+qsl.listeners.add(({ type, level, time, process, flow, args }) => {
+  if (type === 'PROCESS_FAILED') report(process.id, args[0]);
+});
+```
+
+`type` is a key such as `PROCESS_STARTED`; `level` is `'info'` or `'error'`;
+`time` is `performance.now()`; `process` is the process it concerns, as QSL
+holds it (read it, do not change it); `flow` is its flow, or the flow the
+signal is about. A run reads like this:
+
+| Signal | When | `args` |
+| --- | --- | --- |
+| `PROCESS_ADDED` | `add()` | |
+| `LOAD` | `load()` starts | |
+| `FLOW_STARTED` | a flow starts, after its trigger and dependencies | |
+| `PROCESS_RESOLVED` | the dependencies of a process that has any have settled | |
+| `PROCESS_TRIGGERED` | the trigger of a process that has one fires | |
+| `PROCESS_STARTED` | its handler is called | |
+| `PROCESS_RETRY` | a failed attempt is retried | attempt |
+| `PROCESS_COMPLETED` / `PROCESS_FAILED` / `PROCESS_SKIPPED` | the process settles | — / error / reason |
+| `FLOW_COMPLETED` / `FLOW_SKIPPED` | a flow ends | outcome / reason |
+| `ALL_COMPLETED` | the run ends | |
+
+Every process ends with exactly one of `PROCESS_COMPLETED`, `PROCESS_FAILED`
+and `PROCESS_SKIPPED`, emitted once its state is in `processStates`. A
+timeout is a `PROCESS_FAILED` whose error is named `TimeoutError`. Problems
+come at the `error` level: `DEP_NOT_FOUND`, `FLOW_DEP_SKIPPED`,
+`CIRC_PROCESS_DEP_SKIPPED`, `CIRC_FLOW_DEP_SKIPPED`, `PRELOAD_ERROR`,
+`CONDITION_FAILED`, `TRIGGER_FAILED`, `CALLBACK_FAILED`.
+
+Listeners run synchronously, in the middle of the run, so keep them quick and
+defer anything heavy. One that throws is reported to the logger as
+`LISTENER_FAILED`; the others and the run carry on. Listeners stay across
+runs and are removed by `destroy()`. With none registered, nothing is built
+for them. A plugin can report its own signals with
+`qsl.emit(type, level, subject, ...args)`.
+
 ## Events
 
-Call `useEvents()` to enable them. Each carries the process config as `detail`.
+Call `useEvents()` to enable them. Each carries the process config as
+`detail`. They are built from the same stream, by a listener that
+`useEvents()` adds.
 
 `QSL:started`, `QSL:completed`, `QSL:error`, `QSL:skipped`,
 `QSL:all:completed`.

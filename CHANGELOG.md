@@ -6,6 +6,72 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-23
+
+### Added
+
+- **One stream for everything QSL reports.** `emit(type, level, subject,
+  ...args)` feeds the logger, as before, and every function in the new
+  `listeners` set, which gets one object per signal: `type`, `level`
+  (`'info'` or `'error'`), `time` (`performance.now()`), the `process` and
+  `flow` it concerns, and `args`. Listeners run synchronously; one that throws
+  is reported as `LISTENER_FAILED` and the run carries on. They stay across
+  runs and are removed by `destroy()`. This is the base for plugins that
+  record or measure a run, such as reports and performance marks.
+- **New signals** that such a plugin needs and the core alone knows:
+  `LOAD`, `PROCESS_ADDED`, `PROCESS_RESOLVED` (the dependencies of a process
+  that has any have settled), `PROCESS_TRIGGERED`, `FLOW_STARTED`,
+  `FLOW_COMPLETED` (with its outcome) and `FLOW_SKIPPED` (with its reason).
+  The logger prints them only with `qsl.debug`.
+
+### Changed
+
+- **Every process ends with exactly one of `PROCESS_COMPLETED`,
+  `PROCESS_FAILED` and `PROCESS_SKIPPED`**, emitted from one place once its
+  state is recorded, so a listener reading `processStates` sees it. A timeout
+  is now a `PROCESS_FAILED` whose error is a `TimeoutError`, and an unknown
+  type a `PROCESS_FAILED` with an `Error('Unknown type: …')`: the separate
+  `PROCESS_TIMEOUT` and `UNKNOWN_TYPE` log keys are gone. A custom logger
+  that looked for them should look for `PROCESS_FAILED`.
+- **The `QSL:*` DOM events are built by a listener** that `useEvents()`
+  adds. Until it is called nothing copies a process or builds an event; the
+  core used to copy every process at its start and its end, events or not.
+  The events themselves, their names and `detail` are unchanged.
+- `PRELOAD_ERROR` is logged with the process id first, then the error, like
+  the other process signals. `FLOW_DEP_SKIPPED` is logged with the flow id and
+  the missing flows instead of an object.
+- The size budgets are 10.5 kB for the full bundle and 7 kB for slim, up
+  from 10 and 6.5: the stream and the new signals add about 0.2 kB.
+
+### Fixed
+
+- **`between` in an unordered flow staggered only the first process.** Every
+  process after the first waited `between` from the start of the flow, so
+  they all started together at `between`. The n-th now starts `between` × n
+  after the first, as "milliseconds between consecutive processes" says. A
+  test with two processes could not tell the difference; a test with three
+  can.
+
+### Removed
+
+- `fire()`. Dispatching DOM events is the job of the listener `useEvents()`
+  adds; a plugin that dispatched its own through `fire()` can call
+  `window.dispatchEvent` from a listener.
+
+### Development
+
+- Timing is tested, not only order. On virtual time, `tests/timing.test.js`
+  checks the millisecond things happen at: flows run side by side, a
+  process starts in the very millisecond the last thing it waits for
+  settles, `delay`, `between`, timeouts and `retryDelay` wait exactly as
+  long as set, and `load()` resolves when the last process settles. The
+  property tests gained the same rule for every random configuration where
+  only `depends` and order hold a process back.
+- An end-to-end scenario does the same in a real browser, over a local
+  network the test server holds back (`?delay=ms`): four 300 ms flows finish
+  in about 320 ms, and no link of a dependency chain or an ordered flow waits
+  idle.
+
 ## [0.6.0] - 2026-09-22
 
 Found by property tests that run hundreds of thousands of random
@@ -639,7 +705,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Quietsapa/qsl/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Quietsapa/qsl/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/Quietsapa/qsl/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Quietsapa/qsl/compare/v0.4.0...v0.5.0

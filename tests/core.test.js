@@ -77,16 +77,19 @@ describe('flow execution', () => {
 });
 
 describe('reset and destroy', () => {
-    it('exposes a SKIPPED event so fire() is not a silent no-op', async () => {
+    it('dispatches QSL:skipped, with the reason, once events are on', async () => {
         const core = await freshCore();
         expect(core.EVENTS.SKIPPED).toBeTruthy();
 
         core.useEvents();
-        let fired = false;
-        window.addEventListener(core.EVENTS.SKIPPED, () => { fired = true; });
-        core.fire('SKIPPED', { id: 'x' });
+        const reasons = [];
+        const fn = (e) => reasons.push([e.detail.id, e.detail.reason]);
+        window.addEventListener(core.EVENTS.SKIPPED, fn);
+        core.add({ id: 'x', condition: false });
+        await core.load();
+        window.removeEventListener(core.EVENTS.SKIPPED, fn);
 
-        expect(fired).toBe(true);
+        expect(reasons).toEqual([['qsl-x', 'condition']]);
     });
 
     it('keeps registered types and handlers across an automatic reset', async () => {
@@ -200,7 +203,7 @@ describe('logging', () => {
         window.removeEventListener('QSL:log', seen);
 
         const own = lines.filter(([, id]) => id === 'qsl-code').map(([type]) => type);
-        expect(own).toEqual(['PROCESS_STARTED', 'PROCESS_COMPLETED']);
+        expect(own).toEqual(['PROCESS_ADDED', 'PROCESS_STARTED', 'PROCESS_COMPLETED']);
         expect(seen).not.toHaveBeenCalled();
     });
 });

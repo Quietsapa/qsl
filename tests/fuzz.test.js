@@ -151,12 +151,16 @@ async function run(config) {
         attempts: new Map(),
         settles: new Map(),
         added: new Map(),
+        startedAt: new Map(),
     };
 
     core.registerType('fuzz', (p) => {
         const id = p.id;
         log.attempts.set(id, (log.attempts.get(id) || 0) + 1);
-        if (!log.starts.has(id)) log.starts.set(id, ++seq);
+        if (!log.starts.has(id)) {
+            log.starts.set(id, ++seq);
+            log.startedAt.set(id, Date.now());
+        }
         const b = p.behaviour;
 
         /**
@@ -185,7 +189,7 @@ async function run(config) {
 
     core.processCompleteActions.add(function (process) {
         const entry = log.settles.get(process.id) || [];
-        entry.push({ seq: ++seq, outcome: this.processStates.get(process.id) ?? outcomeOf(process), reason: process.skipReason || null });
+        entry.push({ seq: ++seq, at: Date.now(), outcome: this.processStates.get(process.id) ?? outcomeOf(process), reason: process.skipReason || null });
         log.settles.set(process.id, entry);
     });
 
@@ -212,6 +216,7 @@ async function run(config) {
     });
 
     let resolved = false;
+    log.loadAt = Date.now();
     core.load().then(() => { resolved = true; });
     for (let i = 0; i < 200 && !resolved; i++) await vi.advanceTimersByTimeAsync(500);
 
@@ -406,6 +411,38 @@ function check(config, { core, log, resolved }) {
             }
         }
     });
+
+    /**
+     * 10. Nothing waits longer than it has to. Where nothing but `depends`
+     *     and order holds a process back (no trigger on it or its flow, and
+     *     its flow depends on no other flow), it starts in the very
+     *     millisecond the last of them settles. Left out: the late process,
+     *     whose moment depends on when it was added, whatever depends on it,
+     *     and ordered flows it may have joined; and runs where
+     *     scheduler.yield() adds a task per process.
+     */
+    if (!globalThis.scheduler?.yield) {
+        const lateJoined = new Set(config.processes.filter((p) => p.late && p.late.flow !== 'new').map((p) => flowName(p.late.flow)));
+        const settledAt = (id) => log.settles.get(id)?.[0]?.at;
+        config.flows.forEach((f, i) => {
+            const name = flowName(i);
+            if (f.trigger || f.depends.length || flowCycles.has(name)) return;
+            const members = [...log.added].filter(([, p]) => p.flow === name && !p.isLate)
+                .map(([id, p]) => ({ id, p }))
+                .sort((a, b) => (b.p.priority || 0) - (a.p.priority || 0));
+            members.forEach(({ id, p }, k) => {
+                if (!log.startedAt.has(id) || p.trigger || (p.depends || []).includes('late')) return;
+                const waits = (p.depends || []).map((d) => 'qsl-' + d).filter((d) => log.added.has(d) && d !== id);
+                if (f.ordered) {
+                    if (lateJoined.has(name)) return;
+                    if (k > 0) waits.push(members[k - 1].id);
+                }
+                const expected = Math.max(log.loadAt, ...waits.map(settledAt));
+                const actual = log.startedAt.get(id);
+                if (actual !== expected) fail(`${id} started at ${actual - log.loadAt} ms, ${actual - expected} ms after it could have`);
+            });
+        });
+    }
 
     return problems;
 }

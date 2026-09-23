@@ -63,7 +63,7 @@ describe('logger plugin', () => {
 
         expect(log.mock.calls).toEqual([['[QSL] hello from a console process']]);
         expect(error.mock.calls.map((c) => c[0])).toEqual(expect.arrayContaining([
-            '[QSL] Process failed:', '[QSL] Unknown type:', '[QSL] Dependency not found:',
+            '[QSL] Process failed:', '[QSL] Dependency not found:',
         ]));
     });
 
@@ -106,7 +106,7 @@ describe('logger plugin', () => {
         const sources = ['src/core.js', 'src/types.js'].map((f) => readFileSync(f, 'utf8')).join('\n');
 
         const keys = new Set();
-        for (const match of sources.matchAll(/this\.(?:log|error)\('([A-Z_]+)'/g)) keys.add(match[1]);
+        for (const match of sources.matchAll(/this\.(?:log|error|emit)\('([A-Z_]+)'/g)) keys.add(match[1]);
         for (const match of sources.matchAll(/type: '([A-Z_]+)'/g)) keys.add(match[1]);
 
         expect(keys.size).toBeGreaterThan(10);

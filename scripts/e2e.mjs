@@ -42,6 +42,11 @@ const server = createServer(async (req, res) => {
         res.writeHead(403);
         return res.end();
     }
+    /**
+     * ?delay=ms holds the response back, for the timing fixture.
+     */
+    const delay = Number(new URL(req.url, 'http://x').searchParams.get('delay')) || 0;
+    if (delay) await new Promise((r) => setTimeout(r, delay));
     try {
         let body = await readFile(file);
         if (file.endsWith('.html')) body = body.toString().replace(CDN, '/dist/');
@@ -357,6 +362,39 @@ await scenario('modules: plain module scripts, as the browser runs them', '../sc
     console.log(`      (${engine}: a module script's load came ${r.atDone.externalAwaited ? 'after' : 'before'} its top-level await finished)`);
     if (r.modules !== 7) throw new Error('module scripts: ' + r.modules);
 }, {}, true, [/in dependency/]);
+
+/**
+ * Timing in a real browser, over a real (local, held back) network: flows run
+ * side by side, each process starts as soon as what it waits for is done, an
+ * ordered flow runs back to back. The bounds leave room for a slow machine;
+ * what they rule out is serial loading and waits nobody asked for.
+ */
+await scenario('timing: side by side, and each as soon as it may', '../scripts/fixtures/timing/index.html', async (page) => {
+    await until(page, () => typeof window.end === 'number');
+    const { times: t, end } = await page.evaluate(() => ({ times: window.times, end: window.end }));
+    const round = (n) => Math.round(n);
+    for (const id of ['p1', 'p2', 'p3', 'p4', 'c1', 'c2', 'c3', 'o1', 'o2', 'o3']) {
+        if (t[id]?.outcome !== 'PROCESS_COMPLETED') throw new Error(`${id}: ${t[id]?.outcome}`);
+    }
+    const parallel = ['p1', 'p2', 'p3', 'p4'];
+    const lastStart = Math.max(...parallel.map((id) => t[id].started));
+    const lastEnd = Math.max(...parallel.map((id) => t[id].settled));
+    if (lastStart > 100) throw new Error(`parallel flows started as late as ${round(lastStart)} ms`);
+    if (lastEnd > 700) throw new Error(`four 300 ms flows took ${round(lastEnd)} ms: not side by side`);
+    const gaps = [
+        ['c2 after c1', t.c2.started - t.c1.settled],
+        ['c3 after c2', t.c3.started - t.c2.settled],
+        ['o2 after o1', t.o2.started - t.o1.settled],
+        ['o3 after o2', t.o3.started - t.o2.settled],
+    ];
+    for (const [what, gap] of gaps) {
+        if (gap < 0) throw new Error(`${what}: started ${round(-gap)} ms before it settled`);
+        if (gap > 50) throw new Error(`${what}: ${round(gap)} ms idle`);
+    }
+    if (t.c3.settled < 600 || t.o3.settled < 450) throw new Error('a chain finished sooner than its parts can');
+    if (end - Math.max(...Object.values(t).map((x) => x.settled)) > 50) throw new Error(`load() resolved ${round(end)} ms, late`);
+    console.log(`      (${engine}: four 300 ms flows in ${round(lastEnd)} ms, idle between links at most ${Math.max(...gaps.map(([, g]) => round(g)))} ms, run ${round(end)} ms)`);
+});
 
 /**
  * Trusted Types, from fixtures: a page that enforces them and allows QSL's

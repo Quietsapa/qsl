@@ -27,11 +27,7 @@ async function setup() {
     core.registerType('mark', (p) => { ran.push(p.id.replace(/^qsl-/, '')); });
     core.registerType('slow', (p) => sleep(p.ms || 30).then(() => { ran.push(p.id.replace(/^qsl-/, '')); }));
     const errors = [];
-    const error = core.error;
-    core.error = function (key, ...args) {
-        errors.push(key);
-        return error.call(this, key, ...args);
-    };
+    core.listeners.add(({ type, level }) => { if (level === 'error') errors.push(type); });
     return { core, ran, errors };
 }
 

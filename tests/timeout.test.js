@@ -159,7 +159,7 @@ describe('process timeout', () => {
         expect(await run(core, 200)).toBe(timesOut);
     });
 
-    it('is logged as PROCESS_TIMEOUT', async () => {
+    it('is logged as a failure with a TimeoutError', async () => {
         vi.useFakeTimers();
         const core = await freshCore();
         core.registerType('hang', hang);
@@ -169,7 +169,8 @@ describe('process timeout', () => {
         core.add({ id: 'x', type: 'hang', timeout: 100 });
         await run(core, 150);
 
-        expect(lines).toEqual([['PROCESS_TIMEOUT', 'qsl-x', 100]]);
+        expect(lines.map(([type, id, error]) => [type, id, error.name, error.message]))
+            .toEqual([['PROCESS_FAILED', 'qsl-x', 'TimeoutError', 'Timed out after 100 ms']]);
     });
 });
 

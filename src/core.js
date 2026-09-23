@@ -2,7 +2,7 @@ export default {
     /**
      * Constants
      */
-    VERSION: '0.6.0',
+    VERSION: '0.7.0',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
@@ -56,7 +56,6 @@ export default {
     lateFlows: new Set(), // Flows created for processes added while a run is in progress
     processIndex: new Map(), // Every process of the run, by prefixed id
     waiters: new Map(), // Prefixed id -> processes waiting for it to settle
-    _cyclesQueued: false, // A breakCycles() pass is due at the end of this task
     processStates: new Map(), // Settled processes: id -> 'completed', 'failed' or 'skipped'
     loadActions: new Set(), // Set to store before load triggers
     initActions: new Set(), // Set to store init triggers
@@ -69,6 +68,7 @@ export default {
     allCompleteActions: new Set(), // Set to store all flows completion actions
     resetActions: new Set(), // Set to store reset actions
     handlerCallbacksFilters: new Set(), // Set to store handler callbacks filters
+    listeners: new Set(), // Everything QSL reports, as it happens (see emit)
 
     onAllComplete: null, // Callback for all flows completion
     globalResolve: null, // Global resolve function
@@ -85,6 +85,9 @@ export default {
     retryDelay: 0, // Default for `retryDelay`: ms to wait before each retry
     yield: true, // Yield to the main thread before each process runs, where scheduler.yield() exists
     debug: false, // Let the logger print QSL's own progress, not only errors
+
+    _cyclesQueued: false, // A breakCycles() pass is due at the end of this task
+
 
     globalBetween: 0, // Global delay between processes
 
@@ -246,7 +249,7 @@ export default {
                         if (options[key] != null) inherited[key] = options[key];
                     }
                     this.setFlowOptions(inherited, lateId);
-                    this.log('LATE_ADD', config.id, fid, lateId);
+                    this.emit('LATE_ADD', 'info', config, fid, lateId);
                     flowId = lateId;
                 }
             }
@@ -263,6 +266,7 @@ export default {
          */
         this.getOrCreateFlow(normalizedFlowId).push(config);
         this.processIndex.set(config.id, config);
+        this.emit('PROCESS_ADDED', 'info', config);
 
         /**
          * A process added during a run can close a cycle that was not there
@@ -286,6 +290,7 @@ export default {
     async load({ between = false } = {}) {
         if (this.hasStarted) return;
         this.hasStarted = true;
+        this.log('LOAD');
         
         /**
          * Set global between
@@ -382,6 +387,7 @@ export default {
         this.allCompleteActions.clear();
         this.resetActions.clear();
         this.handlerCallbacksFilters.clear();
+        this.listeners.clear();
 
         this.logger = null;
         this.eventsEnabled = false;
@@ -428,7 +434,21 @@ export default {
      * @returns {this}
      */
     useEvents() {
+        if (this.eventsEnabled) return this;
         this.eventsEnabled = true;
+
+        /**
+         * The DOM events are one more listener: until useEvents() is called
+         * nothing copies processes or builds events for them. PROCESS_STARTED,
+         * _COMPLETED, _SKIPPED and _FAILED become QSL:started, :completed,
+         * :skipped and :error; ALL_COMPLETED becomes QSL:all:completed.
+         */
+        this.listeners.add(function ({ type, process, args }) {
+            const name = this.EVENTS[type.replace('PROCESS_', '').replace('FAILED', 'ERROR')];
+            if (!name) return;
+            const detail = process && { ...process, id: process.id, ...(args.length && { [type === 'PROCESS_FAILED' ? 'error' : 'reason']: args[0] }) };
+            window.dispatchEvent(new CustomEvent(name, { detail }));
+        });
 
         /**
          * Return QSL instance for chaining
@@ -437,23 +457,60 @@ export default {
     },
 
     /**
-     * Log a message using the custom logger if set.
+     * Report something QSL did or ran into.
      *
-     * @param {string} type - Log type.
-     * @param {...any} args - Additional log arguments.
+     * One stream for everything: the logger gets it as it always has, as a
+     * key and its arguments, with the process or flow as its id; each
+     * function in `listeners` gets it as one object, with the process itself
+     * and the time. Without listeners nothing is built and nothing is
+     * called beyond the logger.
+     *
+     * A listener runs synchronously, in the middle of the run, so it should
+     * be quick: anything heavy it defers itself. One that throws is reported
+     * to the logger and does not stop the others or the run.
+     *
+     * @param {string} type - A key such as 'PROCESS_STARTED'.
+     * @param {'info'|'error'} level
+     * @param {Object|string|null} subject - The process, a flow id, or null.
+     * @param {...any} args
+     * @returns {void}
      */
-    log(type, ...args) {
-        if (this.logger && typeof this.logger.log === 'function') this.logger.log(type, ...args);
+    emit(type, level, subject, ...args) {
+        const process = subject && typeof subject === 'object' ? subject : null;
+        const logger = this.logger;
+        const print = logger?.[level === 'error' ? 'error' : 'log'];
+        if (typeof print === 'function') {
+            print.call(logger, type, ...(subject == null ? args : [process ? process.id : subject, ...args]));
+        }
+        if (!this.listeners.size) return;
+        const signal = { type, level, time: performance.now(), process, flow: process ? process.flowId ?? null : subject ?? null, args };
+        for (const listener of this.listeners) {
+            try {
+                listener.call(this, signal);
+            } catch (e) {
+                logger?.error?.('LISTENER_FAILED', e);
+            }
+        }
     },
 
     /**
-     * Log an error using the custom logger if set.
-     * 
-     * @param {string} type - Error type.
-     * @param {...any} args - Additional error arguments.
+     * Report progress. Printed by the logger only with `qsl.debug`.
+     *
+     * @param {string} type
+     * @param {...any} args
+     */
+    log(type, ...args) {
+        this.emit(type, 'info', null, ...args);
+    },
+
+    /**
+     * Report a problem. Always printed by the logger.
+     *
+     * @param {string} type
+     * @param {...any} args
      */
     error(type, ...args) {
-        if (this.logger && typeof this.logger.error === 'function') this.logger.error(type, ...args);
+        this.emit(type, 'error', null, ...args);
     },
 
     /**
@@ -473,7 +530,7 @@ export default {
     },
 
     /**
-     * Record how a process ended, fire its event and run completion hooks.
+     * Record how a process ended, run completion hooks and report it.
      *
      * Every process settles exactly once, as completed, failed or skipped.
      * All three count as done for `depends`; `strict` then decides whether a
@@ -491,24 +548,18 @@ export default {
         if (process._settled) return;
         process._settled = true;
 
-        const detail = { ...process, id: process.id };
-        if (outcome === 'failed') {
-            detail.error = error;
-            this.fire('ERROR', detail);
-        } else if (outcome === 'skipped') {
-            detail.reason = process.skipReason || null;
-            this.log('PROCESS_SKIPPED', process.id, detail.reason);
-            this.fire('SKIPPED', detail);
-        } else {
-            this.log('PROCESS_COMPLETED', process.id);
-            this.fire('COMPLETED', detail);
-        }
-
         for (const action of this.processCompleteActions) {
             if (typeof action === 'function') action.call(this, process);
         }
         this.processStates.set(process.id, outcome);
         process._running = false;
+
+        /**
+         * Exactly one of these per process, once its state is recorded.
+         */
+        if (outcome === 'failed') this.emit('PROCESS_FAILED', 'error', process, error);
+        else if (outcome === 'skipped') this.emit('PROCESS_SKIPPED', 'info', process, process.skipReason || null);
+        else this.emit('PROCESS_COMPLETED', 'info', process);
 
         /**
          * Wake exactly the processes waiting for this one.
@@ -519,18 +570,6 @@ export default {
             for (const other of waiting) {
                 if (!other._settled && !other._depsResolved && --other._waitingFor <= 0) this.resolveDependencies(other);
             }
-        }
-    },
-
-    /**
-     * Fire a DOM event if events are enabled.
-     * 
-     * @param {string} event - Event name.
-     * @param {Object} detail - Event detail object.
-     */
-    fire(event, detail) {
-        if (this.eventsEnabled && this.EVENTS[event]) {
-            window.dispatchEvent(new CustomEvent(this.EVENTS[event], { detail }));
         }
     },
 
@@ -855,14 +894,14 @@ export default {
         let flowSkipped = false;
         for (const fid of circularFlows) {
             if (options(fid).status !== READY) continue;
-            this.error('CIRC_FLOW_DEP_SKIPPED', fid, options(fid).depends || []);
+            this.emit('CIRC_FLOW_DEP_SKIPPED', 'error', fid, options(fid).depends || []);
             this.pendingFlows.delete(fid);
             this.skipFlow(fid, 'circular');
             flowSkipped = true;
         }
         for (const p of circular) {
             if (!p.id || p._settled || p._started || p.skipped) continue;
-            this.error('CIRC_PROCESS_DEP_SKIPPED', p.id, p.depends || []);
+            this.emit('CIRC_PROCESS_DEP_SKIPPED', 'error', p, p.depends || []);
             p.skipped = true;
             p.skipReason = 'circular';
 
@@ -946,7 +985,7 @@ export default {
             const missing = depends.filter((id) => !flow(id));
             if (missing.length) {
                 this.pendingFlows.delete(pendingFlowId);
-                this.error('FLOW_DEP_SKIPPED', { flow: pendingFlowId, depends: missing.join(', ') });
+                this.emit('FLOW_DEP_SKIPPED', 'error', pendingFlowId, missing.join(', '));
                 this.skipFlow(pendingFlowId, 'dependency');
                 skipped = true;
                 continue;
@@ -989,6 +1028,7 @@ export default {
      */
     skipFlow(flowId, reason) {
         this.setFlowOptions({ status: this.FLOW_STATE.COMPLETED, outcome: 'skipped' }, flowId);
+        this.emit('FLOW_SKIPPED', 'info', flowId, reason);
         for (const process of this.flows.get(flowId) || []) {
             if (process._settled) continue;
             process.skipped = true;
@@ -1094,9 +1134,10 @@ export default {
          * Reported once, when nothing else is left to wait for: a process
          * added meanwhile under that id would have been waited for.
          */
-        if (missing.length) this.error('DEP_NOT_FOUND', process.id, missing.join(', '));
+        if (missing.length) this.emit('DEP_NOT_FOUND', 'error', process, missing.join(', '));
 
         process._depsResolved = true;
+        if (process.depends?.length) this.emit('PROCESS_RESOLVED', 'info', process);
         if ((unmet || missing.length) && this.isStrict(process)) {
             process.skipped = true;
             process.skipReason = 'dependency';
@@ -1171,7 +1212,6 @@ export default {
         this.completing = true;
 
         this.log('ALL_COMPLETED');
-        this.fire('ALL_COMPLETED');
 
         this.onAllComplete?.();
         if (this.globalResolve !== null) this.globalResolve();
@@ -1293,6 +1333,7 @@ export default {
              * Set flow to running state
              */
             this.setFlowOptions({ status: this.FLOW_STATE.RUNNING }, fid);
+            this.emit('FLOW_STARTED', 'info', fid);
 
             /**
              * Run flows in parallel
@@ -1330,7 +1371,7 @@ export default {
                                 if (p.fetchPriority) link.setAttribute('fetchpriority', p.fetchPriority);
                                 document.head.appendChild(link);
                             } catch (e) {
-                                this.error('PRELOAD_ERROR', e, p.id);
+                                this.emit('PRELOAD_ERROR', 'error', p, e);
                             }
                         }
                     }
@@ -1368,10 +1409,12 @@ export default {
                     await prev;
                 } else {
                     /**
-                     * Unordered: run all processes in parallel
+                     * Unordered: run all processes in parallel, the n-th
+                     * `between` × n after the first, so they are staggered
+                     * rather than all released together after one wait.
                      */
                     const promises = processes.map(async (process, idx) => {
-                        if (idx > 0 && between) await new Promise(res => setTimeout(res, between));
+                        if (idx > 0 && between) await new Promise(res => setTimeout(res, idx * between));
                         return this.run(process);
                     });
                     await Promise.all(promises);
@@ -1385,7 +1428,9 @@ export default {
                 const tainted = processes.some(p =>
                     this.processStates.get(p.id) === 'failed' || (p.skipped && p.skipReason === 'dependency')
                 );
-                this.setFlowOptions({ status: this.FLOW_STATE.COMPLETED, outcome: tainted ? 'failed' : 'completed' }, fid);
+                const outcome = tainted ? 'failed' : 'completed';
+                this.setFlowOptions({ status: this.FLOW_STATE.COMPLETED, outcome }, fid);
+                this.emit('FLOW_COMPLETED', 'info', fid, outcome);
                 this.callback(options.onComplete, fid);
 
                 /**
@@ -1446,7 +1491,9 @@ export default {
         const trigger = process.trigger != null && this.getTriggerFunction(process.trigger, process);
         if (trigger) {
             trigger(() => {
+                if (process._triggered) return;
                 process._triggered = true;
+                this.emit('PROCESS_TRIGGERED', 'info', process);
                 if (process._depsResolved) process._waitResolve();
             });
         } else {
@@ -1629,13 +1676,11 @@ export default {
         }
         const handler = this.types.get(process.type);
         if (!handler) {
-            this.error('UNKNOWN_TYPE', process.type, process.id);
             this.settle(process, 'failed', new Error('Unknown type: ' + process.type));
             return;
         }
         process._started = true;
-        this.log('PROCESS_STARTED', process.id);
-        this.fire('STARTED', { ...process, id: process.id });
+        this.emit('PROCESS_STARTED', 'info', process);
         
         /**
          * Build handler callbacks from filters
@@ -1678,7 +1723,7 @@ export default {
                     : handler({ ...process, onError: null }, { ...callbacks, retrying: true }))
                 .catch((error) => {
                     if (last || timedOut) throw error;
-                    this.log('PROCESS_RETRY', process.id, n + 1);
+                    this.emit('PROCESS_RETRY', 'info', process, n + 1);
                     if (!retryDelay) return attempt(n + 1);
                     return new Promise(res => setTimeout(res, retryDelay))
                         .then(() => timedOut ? Promise.reject(error) : attempt(n + 1));
@@ -1707,11 +1752,8 @@ export default {
         return work
             .then(() => this.settle(process, 'completed'))
             .catch((error) => {
-                if (error && error.name === 'TimeoutError') {
-                    this.error('PROCESS_TIMEOUT', process.id, timeout);
-                    if (typeof process.onError === 'function') this.callback(() => process.onError(error), process.id);
-                } else {
-                    this.error('PROCESS_FAILED', process.id, error);
+                if (error && error.name === 'TimeoutError' && typeof process.onError === 'function') {
+                    this.callback(() => process.onError(error), process.id);
                 }
                 this.settle(process, 'failed', error);
             });

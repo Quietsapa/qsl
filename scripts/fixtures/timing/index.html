@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>QSL e2e fixture — timing</title>
+<!--
+  Not an example: a fixture for scripts/e2e.mjs. Scripts the test server
+  holds back for a set time (?delay=ms), in parallel flows, a dependency
+  chain across flows and an ordered flow, with every start and settle
+  stamped from QSL's own signals. It pins down that in a real browser, with
+  a real network and scheduler.yield() where there is one, things run side
+  by side and each starts as soon as it may.
+-->
+</head>
+<body>
+<script src="/dist/qsl.min.js"></script>
+<script>
+  var qsl = window.__QSL__;
+  var t0 = performance.now();
+  window.times = {};
+  qsl.listeners.add(function (signal) {
+    if (!signal.process) return;
+    var id = signal.process.id.replace(/^qsl-/, '');
+    var entry = window.times[id] = window.times[id] || {};
+    if (signal.type === 'PROCESS_STARTED') entry.started = signal.time - t0;
+    if (/^PROCESS_(COMPLETED|FAILED|SKIPPED)$/.test(signal.type)) {
+      entry.settled = signal.time - t0;
+      entry.outcome = signal.type;
+    }
+  });
+
+  function script(id, ms, flow, extra) {
+    var config = { id: id, type: 'script', src: '/scripts/fixtures/timing/tick.js?delay=' + ms + '&n=' + id };
+    for (var k in extra) config[k] = extra[k];
+    qsl.add(config, flow);
+  }
+
+  /**
+   * Four flows side by side, 300 ms each.
+   */
+  ['p1', 'p2', 'p3', 'p4'].forEach(function (id) { script(id, 300, 'parallel-' + id); });
+
+  /**
+   * A chain across flows: each waits for the one before.
+   */
+  script('c1', 200, 'chain-a');
+  script('c2', 200, 'chain-b', { depends: ['c1'] });
+  script('c3', 200, 'chain-c', { depends: ['c2'] });
+
+  /**
+   * An ordered flow: one after another.
+   */
+  qsl.setFlowOptions({ ordered: true }, 'ordered');
+  script('o1', 150, 'ordered');
+  script('o2', 150, 'ordered');
+  script('o3', 150, 'ordered');
+
+  qsl.load().then(function () { window.end = performance.now() - t0; });
+</script>
+</body>
+</html>

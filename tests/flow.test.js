@@ -540,7 +540,8 @@ describe('unknown type', () => {
         expect(await within(core.load())).toBe('resolved');
         window.removeEventListener('QSL:error', fn);
 
-        expect(lines.find(([t]) => t === 'UNKNOWN_TYPE')).toEqual(['UNKNOWN_TYPE', 'carousel', 'qsl-x']);
+        const [type, id, logged] = lines.find(([t]) => t === 'PROCESS_FAILED');
+        expect([type, id, logged.message]).toEqual(['PROCESS_FAILED', 'qsl-x', 'Unknown type: carousel']);
         expect(error.message).toBe('Unknown type: carousel');
     });
 });
