@@ -5,6 +5,8 @@ import {
     timezoneCondition,
     urlCondition,
     userAgentCondition,
+    storageCondition,
+    domCondition,
 } from '../src/plugins/conditions.js';
 import { resolveCondition } from './helpers.js';
 
@@ -59,6 +61,8 @@ describe('every condition handler', () => {
         ['tz', timezoneCondition, 'lang:is:en'],
         ['url', urlCondition, 'tz:is:UTC'],
         ['ua', userAgentCondition, 'media:(min-width: 1px)'],
+        ['storage', storageCondition, 'url:query:x'],
+        ['dom', domCondition, 'storage:cookie:has:x'],
     ])('%s ignores options it does not own', (_, handler, foreign) => {
         expect(resolveCondition(handler, foreign)).toBeNull();
         expect(resolveCondition(handler, () => true)).toBeNull();
@@ -83,8 +87,9 @@ describe('language condition', () => {
         ['lang:is:ru-RU', 'ru-RU', PASS],
         ['lang:is:ru-RU', 'ru', FAIL],
         ['lang:equals:en-US', 'en-US', PASS],
+        ['lang:has:RU', 'ru-RU', PASS],
         ['lang:contains:RU', 'ru-RU', PASS],
-        ['lang:contains:de', 'ru-RU', FAIL],
+        ['lang:has:de', 'ru-RU', FAIL],
         ['lang:startsWith:ru', 'ru-RU', PASS],
         ['lang:startsWith:en', 'ru-RU', FAIL],
         ['lang:in:de-DE, fr-FR', 'de-DE', PASS],
@@ -102,8 +107,9 @@ describe('timezone condition', () => {
     it.each([
         ['tz:is:Europe/Moscow', 'Europe/Moscow', -180, PASS],
         ['tz:equals:Europe/Moscow', 'Europe/Berlin', -60, FAIL],
+        ['tz:has:Europe', 'Europe/Berlin', -60, PASS],
         ['tz:contains:Europe', 'Europe/Berlin', -60, PASS],
-        ['tz:contains:America', 'Europe/Berlin', -60, FAIL],
+        ['tz:has:America', 'Europe/Berlin', -60, FAIL],
         ['tz:offset:3', 'Europe/Moscow', -180, PASS],
         ['tz:offset:3', 'Europe/Berlin', -60, FAIL],
         ['tz:offset:-5', 'America/New_York', 300, PASS],
@@ -122,8 +128,9 @@ describe('url condition', () => {
     const URL = 'https://shop.example.com/blog/post-1.html?utm_source=ads&token=a=b&debug#top';
 
     it.each([
+        ['url:has:utm_source=ads', PASS],
         ['url:contains:utm_source=ads', PASS],
-        ['url:contains:utm_source=mail', FAIL],
+        ['url:has:utm_source=mail', FAIL],
         ['url:path:/post', PASS],
         ['url:path:/about', FAIL],
         ['url:pathStartsWith:/blog', PASS],
@@ -197,8 +204,9 @@ describe('user agent condition', () => {
         ['ua:platform:windows', 'winChrome', PASS],
         ['ua:os:beos', 'winChrome', FAIL],
 
+        ['ua:has:firefox', 'linuxFirefox', PASS],
         ['ua:contains:firefox', 'linuxFirefox', PASS],
-        ['ua:contains:Firefox', 'winChrome', FAIL],
+        ['ua:has:Firefox', 'winChrome', FAIL],
         ['ua::gecko', 'linuxFirefox', PASS],
         ['ua:is:' + UA.winChrome, 'winChrome', PASS],
         ['ua:equals:Mozilla', 'winChrome', FAIL],
@@ -210,5 +218,126 @@ describe('user agent condition', () => {
     ])('%s on %s', (opt, agent, expected) => {
         withUserAgent(UA[agent]);
         expect(resolveCondition(userAgentCondition, opt)).toBe(expected);
+    });
+});
+
+describe('storage condition', () => {
+    afterEach(() => {
+        for (const c of document.cookie.split(';')) {
+            const name = c.split('=')[0].trim();
+            if (name) document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+        }
+        localStorage.clear();
+        sessionStorage.clear();
+    });
+
+    it.each([
+        ['storage:cookie:has:consent', PASS],
+        ['storage:cookie:has:missing', FAIL],
+        ['storage:cookie:has:sent', PASS],
+        ['storage:cookie:equals:consent=granted', PASS],
+        ['storage:cookie:is:consent=granted', PASS],
+        ['storage:cookie:equals:consent=denied', FAIL],
+        ['storage:cookie:equals:token=a=b', PASS],
+        ['storage:cookie:equals:name=Jane Doe', PASS],
+        ['storage:cookie:equals:sent=', PASS],
+        ['storage:cookie:has:consent=grant', PASS],
+        ['storage:cookie:contains:consent=grant', PASS],
+        ['storage:cookie:has:consent=deny', FAIL],
+        ['storage:cookie:has:OptanonConsent=C0002:1', PASS],
+        ['storage:cookie:has:OptanonConsent=C0004:1', FAIL],
+        ['storage:cookie:has:missing=x', FAIL],
+        ['storage:cookie:startsWith:consent=gr', PASS],
+        ['storage:cookie:startsWith:consent=an', FAIL],
+        ['storage:cookie:matches:consent=^(granted|all)$', PASS],
+        ['storage:cookie:matches:consent=^all$', FAIL],
+        ['storage:cookie:matches:consent=[', FAIL],
+        ['storage:local:equals:ab:variant=b', PASS],
+        ['storage:local:equals:ab:variant=a', FAIL],
+        ['storage:local:has:ab:variant', PASS],
+        ['storage:local:has:ab:variant=b', PASS],
+        ['storage:session:has:seen_popup', PASS],
+        ['storage:session:equals:seen_popup=1', PASS],
+        ['storage:session:has:other', FAIL],
+        ['storage:local:has:seen_popup', FAIL],
+        ['storage:cookie:equals:consent', FAIL],
+        ['storage:cookie:has:', FAIL],
+        ['storage:cookie:equals:=x', FAIL],
+        ['storage:cookie:unknown:consent=granted', FAIL],
+        ['storage:cookie:consent', FAIL],
+        ['storage:indexed:has:db', FAIL],
+        ['storage::has:consent', FAIL],
+    ])('%s', (opt, expected) => {
+        document.cookie = 'consent=granted; path=/';
+        document.cookie = 'token=a=b; path=/';
+        document.cookie = 'name=' + encodeURIComponent('Jane Doe') + '; path=/';
+        document.cookie = 'sent=; path=/';
+        document.cookie = 'OptanonConsent=' + encodeURIComponent('groups=C0001:1,C0002:1,C0004:0') + '; path=/';
+        localStorage.setItem('ab:variant', 'b');
+        sessionStorage.setItem('seen_popup', '1');
+        expect(resolveCondition(storageCondition, opt)).toBe(expected);
+    });
+
+    it('fails an operator that compares a value when no value is given', () => {
+        localStorage.setItem('mode', 'mode-dark');
+        expect(resolveCondition(storageCondition, 'storage:local:contains:mode')).toBe(FAIL);
+        expect(resolveCondition(storageCondition, 'storage:local:startsWith:mode')).toBe(FAIL);
+        expect(resolveCondition(storageCondition, 'storage:local:has:mode=dark')).toBe(PASS);
+        expect(resolveCondition(storageCondition, 'storage:local:has:mode')).toBe(PASS);
+    });
+
+    it('does not take a cookie whose name only ends with the key', () => {
+        document.cookie = 'xconsent=granted; path=/';
+        expect(resolveCondition(storageCondition, 'storage:cookie:has:consent')).toBe(FAIL);
+    });
+
+    it('treats storage the browser blocks as empty, without an error', () => {
+        vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('blocked', 'SecurityError'); });
+        expect(resolveCondition(storageCondition, 'storage:local:has:anything')).toBe(FAIL);
+        expect(resolveCondition(storageCondition, 'storage:session:has:anything')).toBe(FAIL);
+    });
+
+    it('keeps a cookie value that is not valid percent-encoding as it is', () => {
+        document.cookie = 'raw=100%; path=/';
+        expect(resolveCondition(storageCondition, 'storage:cookie:equals:raw=100%')).toBe(PASS);
+    });
+});
+
+describe('dom condition', () => {
+    afterEach(() => {
+        document.documentElement.removeAttribute('lang');
+        document.body.className = '';
+        document.body.innerHTML = '';
+    });
+
+    it.each([
+        ['dom:has:html[lang|="ru"]', 'ru-RU', PASS],
+        ['dom:has:html[lang|="ru"]', 'ru', PASS],
+        ['dom:has:html[lang|="ru"]', 'rus', FAIL],
+        ['dom:has:html[lang="en-GB"]', 'en-GB', PASS],
+        ['dom:has:html[lang="en-GB"]', 'en-US', FAIL],
+        ['dom:has:html[lang^="en"]', 'en-US', PASS],
+        ['dom:has:html:not([lang|="ru"])', 'en-US', PASS],
+        ['dom:has:html:not([lang|="ru"])', 'ru-RU', FAIL],
+        ['dom:has:body.logged-in', 'en', PASS],
+        ['dom:has:body.guest', 'en', FAIL],
+        ['dom:has:[data-page-type="product"] .price', 'en', PASS],
+        ['dom:has:[data-page-type="cart"]', 'en', FAIL],
+        ['dom:has:a[href="https://example.com/a:b"]', 'en', PASS],
+        ['dom:has:[', 'en', FAIL],
+        ['dom:has:', 'en', FAIL],
+        ['dom:is:body', 'en', FAIL],
+        ['dom::body', 'en', FAIL],
+    ])('%s with lang=%s', (opt, lang, expected) => {
+        document.documentElement.setAttribute('lang', lang);
+        document.body.className = 'logged-in';
+        document.body.innerHTML = '<main data-page-type="product"><span class="price">9</span><a href="https://example.com/a:b">x</a></main>';
+        expect(resolveCondition(domCondition, opt)).toBe(expected);
+    });
+
+    it('sees the document as it is when checked', () => {
+        expect(resolveCondition(domCondition, 'dom:has:#late')).toBe(FAIL);
+        document.body.innerHTML = '<div id="late"></div>';
+        expect(resolveCondition(domCondition, 'dom:has:#late')).toBe(PASS);
     });
 });

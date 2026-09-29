@@ -58,7 +58,7 @@ describe('events plugin', () => {
         const hits = [];
         registerVendorType(core, 'DOMContentLoaded', hits, 1);
 
-        core.add({ id: 'vendor', type: 'vendor' });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor' });
         await core.load();
 
         expect(hits).toEqual(['listener-0']);
@@ -74,7 +74,7 @@ describe('events plugin', () => {
 
         const listeners = core.listeners.size;
         for (let i = 0; i < 50; i++) {
-            core.add({ id: 'vendor', type: 'vendor' });
+            core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor' });
             await core.load();
         }
         expect(hits).toHaveLength(50);
@@ -89,7 +89,7 @@ describe('events plugin', () => {
             vendor(process, callbacks);
             return new Promise(() => {});
         });
-        core.add({ id: 'stuck', type: 'stuck' });
+        core.add({ lifecycleEvents: true, id: 'stuck', type: 'stuck' });
         const loading = core.load();
         await new Promise((r) => setTimeout(r, 10));
         expect(core._customEvents.size).toBe(1);
@@ -116,7 +116,7 @@ describe('events plugin', () => {
             return native.call(this, type, listener, opts);
         };
         try {
-            core.add({ id: 'vendor', type: 'vendor' });
+            core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor' });
             await core.load();
         } finally {
             delete document.addEventListener;
@@ -136,7 +136,7 @@ describe('events plugin', () => {
         const hits = [];
         registerVendorType(core, 'DOMContentLoaded', hits, 3);
 
-        core.add({ id: 'vendor', type: 'vendor' });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor' });
         await core.load();
 
         expect(hits.sort()).toEqual(['listener-0', 'listener-1', 'listener-2']);
@@ -150,7 +150,7 @@ describe('events plugin', () => {
         const hits = [];
         registerVendorType(core, 'load', hits, 2);
 
-        core.add({ id: 'vendor', type: 'vendor' });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor' });
         await core.load();
 
         expect(hits.sort()).toEqual(['listener-0', 'listener-1']);
@@ -180,10 +180,10 @@ describe('events plugin', () => {
             return Promise.resolve();
         });
 
-        core.add({ id: 'vendor', type: 'vendor', tag: 'first-run' });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor', tag: 'first-run' });
         await core.load();
 
-        core.add({ id: 'vendor', type: 'vendor', tag: 'second-run' });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor', tag: 'second-run' });
         await core.load();
 
         expect(hits).toEqual(['first-run', 'second-run']);
@@ -209,11 +209,11 @@ describe('events plugin', () => {
             return new Promise((resolve) => setTimeout(resolve, process.wait || 0));
         });
 
-        core.add({ id: 'vendor', type: 'vendor', tag: 'early', wait: 120 });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor', tag: 'early', wait: 120 });
         const loading = core.load();
 
         await new Promise((r) => setTimeout(r, 40));
-        core.add({ id: 'vendor', type: 'vendor', tag: 'late' });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor', tag: 'late' });
 
         await loading;
 
@@ -234,13 +234,13 @@ describe('events plugin', () => {
          */
         document.addEventListener('DOMContentLoaded', () => hits.push('unmanaged'));
 
-        core.add({ id: 'plain', type: 'noop' });
+        core.add({ lifecycleEvents: true, id: 'plain', type: 'noop' });
         await core.load();
 
         expect(hits).toEqual([]);
     });
 
-    it('honours fireEvents: false on the process', async () => {
+    it('leaves a process that does not ask for lifecycleEvents alone', async () => {
         const core = await freshCore();
         core.use(events);
         core.LIFECYCLE.DOMREADY = true;
@@ -248,10 +248,85 @@ describe('events plugin', () => {
         const hits = [];
         registerVendorType(core, 'DOMContentLoaded', hits, 1);
 
-        core.add({ id: 'vendor', type: 'vendor', fireEvents: false });
+        core.add({ lifecycleEvents: true, id: 'asks', type: 'noop-asks' });
+        core.registerType('noop-asks', () => Promise.resolve());
+        core.add({ id: 'vendor', type: 'vendor' });
         await core.load();
 
         expect(hits).toEqual([]);
+    });
+
+    it('runs a listener registered after its process settled, while the run goes on, once', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const hits = [];
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        /**
+         * The vendor registers from a timer, after its script has loaded;
+         * the stack still points at its file (this one).
+         */
+        core.registerType('script', () => {
+            setTimeout(() => document.addEventListener('DOMContentLoaded', () => hits.push('late')), 20);
+            return Promise.resolve();
+        });
+        core.registerType('slow', () => sleep(80));
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'script', src: 'events.test.js' }, 'a');
+        core.add({ id: 'keep', type: 'slow' }, 'b');
+        await core.load();
+        await sleep(20);
+
+        expect(hits).toEqual(['late']);
+        expect(core._customEvents.size).toBe(0);
+    });
+
+    it('runs the same function registered twice once, and a handleEvent object once', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const hits = [];
+        const fn = () => hits.push('fn');
+        const obj = { handleEvent: () => hits.push('obj') };
+        core.registerType('script', () => {
+            document.addEventListener('DOMContentLoaded', fn);
+            document.addEventListener('DOMContentLoaded', fn);
+            document.addEventListener('DOMContentLoaded', obj, { passive: true });
+            return Promise.resolve();
+        });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'script', src: 'events.test.js' });
+        await core.load();
+        await new Promise((r) => setTimeout(r, 10));
+
+        expect(hits.sort()).toEqual(['fn', 'obj']);
+    });
+
+    it('patches nothing in a run where no process asks for lifecycleEvents', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const before = document.addEventListener;
+        let during = null;
+        core.registerType('probe', () => { during = document.addEventListener; });
+
+        core.add({ id: 'probe', type: 'probe' });
+        await core.load();
+
+        expect(during).toBe(before);
+    });
+
+    it('starts intercepting when a process that asks for it is added during the run', async () => {
+        const core = await freshCore();
+        core.use(events);
+        core.LIFECYCLE.DOMREADY = true;
+        const hits = [];
+        registerVendorType(core, 'DOMContentLoaded', hits, 1);
+        core.registerType('adder', () => { core.add({ id: 'late', type: 'vendor', lifecycleEvents: true }); });
+
+        core.add({ id: 'adder', type: 'adder' });
+        await core.load();
+
+        expect(hits).toEqual(['listener-0']);
     });
 
     describe('addEventListener patch lifecycle', () => {
@@ -293,7 +368,7 @@ describe('events plugin', () => {
             core.LIFECYCLE.DOMREADY = true;
             core.registerType('noop', () => Promise.resolve());
 
-            core.add({ id: 'plain', type: 'noop' });
+            core.add({ lifecycleEvents: true, id: 'plain', type: 'noop' });
             await core.load();
 
             expect(own(document)).toBe(docBefore);
@@ -312,7 +387,7 @@ describe('events plugin', () => {
             core.LIFECYCLE.DOMREADY = true;
             core.registerType('noop', () => Promise.resolve());
 
-            core.add({ id: 'plain', type: 'noop' });
+            core.add({ lifecycleEvents: true, id: 'plain', type: 'noop' });
             await core.load();
 
             /**
@@ -353,7 +428,7 @@ describe('events plugin', () => {
             });
 
             try {
-                core.add({ id: 'apm', type: 'apm' });
+                core.add({ lifecycleEvents: true, id: 'apm', type: 'apm' });
                 await core.load();
 
                 expect(document.addEventListener).toBe(apmWrapper);
@@ -393,10 +468,10 @@ describe('events plugin', () => {
             registerVendorType(core, 'DOMContentLoaded', hits, 1);
 
             try {
-                core.add({ id: 'apm', type: 'apm' });
+                core.add({ lifecycleEvents: true, id: 'apm', type: 'apm' });
                 await core.load();
 
-                core.add({ id: 'vendor', type: 'vendor' });
+                core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor' });
                 await core.load();
 
                 expect(hits).toEqual(['listener-0']);
@@ -426,7 +501,7 @@ describe('events plugin', () => {
                     document.addEventListener.call(other, 'ping', () => {});
                     return Promise.resolve();
                 });
-                core.add({ id: 'probe', type: 'probe' });
+                core.add({ lifecycleEvents: true, id: 'probe', type: 'probe' });
                 await core.load();
             } finally {
                 proto.addEventListener = native;
@@ -434,21 +509,6 @@ describe('events plugin', () => {
 
             expect(receivers).toContain(other);
         });
-    });
-
-    it('honours fireEvents: false on the flow', async () => {
-        const core = await freshCore();
-        core.use(events);
-        core.LIFECYCLE.DOMREADY = true;
-
-        const hits = [];
-        registerVendorType(core, 'DOMContentLoaded', hits, 1);
-
-        core.setFlowOptions({ fireEvents: false }, 'quiet');
-        core.add({ id: 'vendor', type: 'vendor' }, 'quiet');
-        await core.load();
-
-        expect(hits).toEqual([]);
     });
 
     it('leaves a listener alone when the event has not happened yet', async () => {
@@ -459,7 +519,7 @@ describe('events plugin', () => {
         const hits = [];
         registerVendorType(core, 'DOMContentLoaded', hits, 1);
 
-        core.add({ id: 'vendor', type: 'vendor' });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'vendor' });
         await core.load();
         expect(hits).toEqual([]);
 
@@ -486,7 +546,7 @@ describe('events plugin', () => {
             return Promise.resolve();
         });
 
-        core.add({ id: 'vendor', type: 'script', src: 'https://cdn.example/vendor/events.test.js?v=2' });
+        core.add({ lifecycleEvents: true, id: 'vendor', type: 'script', src: 'https://cdn.example/vendor/events.test.js?v=2' });
         await core.load();
 
         expect(hits).toEqual(['by-stack']);
@@ -532,12 +592,12 @@ describe('events plugin', () => {
         });
 
         /**
-         * `other` has events off: a listener attributed to it would be left
+         * `other` does not ask for events: a listener attributed to it is left
          * to the browser, and DOMContentLoaded is long gone. Only a listener
          * attributed to `widget` ever runs.
          */
-        core.add({ id: 'other', type: 'script', src: 'https://cdn.example/v2/other.js', fireEvents: false });
-        core.add({ id: 'widget', type: 'script', src: 'https://cdn.example/v2/widget.js?build=7' });
+        core.add({ id: 'other', type: 'script', src: 'https://cdn.example/v2/other.js' });
+        core.add({ lifecycleEvents: true, id: 'widget', type: 'script', src: 'https://cdn.example/v2/widget.js?build=7' });
         await core.load();
 
         expect(hits).toEqual(attributed ? ['widget'] : []);
@@ -569,7 +629,7 @@ describe('events plugin', () => {
             return Promise.resolve();
         });
 
-        core.add({ id: 'vendor', type, src });
+        core.add({ lifecycleEvents: true, id: 'vendor', type, src });
         await core.load();
 
         /**

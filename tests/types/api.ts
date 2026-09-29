@@ -115,9 +115,12 @@ qsl.add({ type: 'script', src: '/a.js', trigger: { operator: 'xor', triggers: ['
  */
 for (const condition of [
     true, false, 'media:(prefers-reduced-motion: no-preference)',
-    'lang:startsWith:ru', 'lang:in:en-US,en-CA', 'tz:contains:Europe', 'timezone:offset:3',
+    'lang:startsWith:ru', 'lang:in:en-US,en-CA', 'tz:has:Europe', 'timezone:offset:3',
     'url:query:utm_source=ads', 'url:matches:#/home$', 'url:pathStartsWith:/blog',
-    'ua:device:mobile', 'ua:os:ios', 'ua:browser:safari', 'userAgent:contains:Mobile',
+    'ua:device:mobile', 'ua:os:ios', 'ua:browser:safari', 'userAgent:has:Mobile',
+    'storage:cookie:equals:consent=granted', 'storage:cookie:has:OptanonConsent=C0002:1',
+    'storage:local:has:ab_variant', 'storage:session:matches:seen_popup=^1$',
+    'dom:has:html[lang|="ru"]', 'dom:has:body.logged-in',
     ['ua:device:mobile', 'ua:os:android'],
     { operator: 'or', conditions: ['lang:startsWith:ru', 'tz:is:Europe/Moscow'] },
     () => document.cookie.includes('returning=1'),
@@ -127,6 +130,16 @@ for (const condition of [
 
 // @ts-expect-error not a device
 qsl.add({ type: 'script', src: '/a.js', condition: 'ua:device:watch' });
+// @ts-expect-error IndexedDB is async; a condition is decided there and then
+qsl.add({ type: 'script', src: '/a.js', condition: 'storage:indexed:has:db' });
+// @ts-expect-error `has` in 0.9.0: contains still works at runtime, but is no longer typed
+qsl.add({ type: 'script', src: '/a.js', condition: 'url:contains:utm_source' });
+// @ts-expect-error a DOM condition needs its operator
+qsl.add({ type: 'script', src: '/a.js', condition: 'dom:body.logged-in' });
+// @ts-expect-error a storage condition needs its operator
+qsl.add({ type: 'script', src: '/a.js', condition: 'storage:cookie:consent' });
+// @ts-expect-error equals compares a value: key=value
+qsl.add({ type: 'script', src: '/a.js', condition: 'storage:cookie:equals:consent' });
 // @ts-expect-error a URL condition needs its kind
 qsl.add({ type: 'script', src: '/a.js', condition: 'url:utm_source' });
 // @ts-expect-error `conditions`, not `triggers`
@@ -136,7 +149,12 @@ qsl.add({ type: 'script', src: '/a.js', condition: { operator: 'or', triggers: [
  * ── Flows ───────────────────────────────────────────────────────────────────
  */
 qsl.setFlowOptions({ ordered: true, strict: true, between: 120, depends: ['analytics'], timeout: 5000, retries: 1, retryDelay: 500 }, 'setup');
-qsl.setFlowOptions({ group: 'marketing', paused: true, preload: true, priority: 5, delay: 100, fireEvents: false }, 'ads');
+qsl.setFlowOptions({ group: 'marketing', paused: true, preload: true, priority: 5, delay: 100 }, 'ads');
+// @ts-expect-error gone in 0.8.0: a process asks with lifecycleEvents
+qsl.setFlowOptions({ fireEvents: false }, 'ads');
+qsl.add({ type: 'script', src: '/vendor.js', lifecycleEvents: true });
+// @ts-expect-error renamed in 0.8.0: lifecycleEvents, off by default
+qsl.add({ type: 'script', src: '/vendor.js', fireEvents: false });
 qsl.setFlowOptions({ onBeforeStart: () => {}, onComplete: () => {}, onError: () => {} });
 // @ts-expect-error renamed in 0.8.0: onBeforeStart, as on a process
 qsl.setFlowOptions({ beforeStart: () => {} });

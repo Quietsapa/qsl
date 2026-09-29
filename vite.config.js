@@ -61,7 +61,7 @@ export default defineConfig(({ mode }) => {
             emptyOutDir: target.emptyOutDir,
             minify: target.minify,
             sourcemap: true,
-            target: 'es2019',
+            target: 'es2020',
             lib: {
                 entry: target.entry,
                 formats: target.formats,

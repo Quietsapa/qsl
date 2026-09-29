@@ -99,7 +99,15 @@ after those events have passed.
 | --- | --- | --- | --- |
 | `dist/qsl.mjs` | `src/index.js` | — | ESM, nothing registered, nothing started |
 | `dist/qsl.min.js` | `src/presets/full.js` | ~10.6 kB | All types, conditions, triggers, and the logger and events plugins |
-| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~7.1 kB | The `script` and `inline-script` types only |
+| `dist/qsl.slim.min.js` | `src/presets/default.js` | ~6.8 kB | The `script` and `inline-script` types only |
+
+### Browser support
+
+The browser bundles are built for ES2020: Chrome and Edge 80, Firefox 74,
+Safari 13.1, iOS Safari 13.4, Samsung Internet 13, and anything newer — about
+99% of browsers in use. In an older browser the bundle does not parse, so
+nothing it would load runs. The ESM entry is built the same way; a bundler
+that compiles your app for older browsers compiles QSL along with it.
 
 ## Quick start
 
@@ -180,7 +188,7 @@ settles by the usual rules.
 follows its own options like any flow, and the run completes when it does. A
 process added with no flow gets a late flow of its own. A process added to a
 flow that has already started gets one too, carrying over that flow's
-`condition`, `strict`, `timeout`, `retries`, `retryDelay`, `fireEvents` and
+`condition`, `strict`, `timeout`, `retries`, `retryDelay` and
 `group`: a started flow — one in its `delay` included — runs from the list it
 had when it started. A process added after the run has completed with
 `autoReset` off waits for the next run: `reset()` puts it there, and
@@ -291,7 +299,6 @@ flow waiting.
 | `retries` | — | Default `retries` for the flow's processes. Not set: inherits `qsl.retries` |
 | `retryDelay` | — | Default `retryDelay` for the flow's processes, in ms. Not set: inherits `qsl.retryDelay` |
 | `preload` | `false` | Emit `<link rel=preload>` for scripts and styles |
-| `fireEvents` | `true` | Let the `events` plugin re-dispatch lifecycle events |
 
 ### Other methods
 
@@ -398,8 +405,9 @@ own images and scripts. A flow with `preload` passes it on to the
 
 Common fields across types: `id`, `type`, `depends`, `condition`, `trigger`,
 `priority`, `delay`, `strict`, `timeout`, `retries`, `retryDelay`, `data` (rendered as `data-*`
-attributes), `footer` (append to `<body>` instead of `<head>`), `fireEvents`
-(`false` keeps the events plugin away from this process), and the callbacks
+attributes), `footer` (append to `<body>` instead of `<head>`),
+`lifecycleEvents` (`true` asks the events plugin to re-dispatch
+DOMContentLoaded and load to this process; off by default), and the callbacks
 `onBeforeStart`, `onComplete`, `onError`.
 
 Writing your own is a function returning a promise:
@@ -459,23 +467,40 @@ Set `condition` on a process or a flow. A failing condition skips it.
 | --- | --- |
 | `media:<query>` | `media:(min-width: 768px)` |
 | `lang:<op>:<value>` | `lang:startsWith:ru`, `lang:in:en-US,en-GB` |
-| `tz:<op>:<value>` | `tz:contains:Europe`, `tz:offset:3` |
+| `tz:<op>:<value>` | `tz:has:Europe`, `tz:offset:3` |
 | `url:<op>:<value>` | `url:pathStartsWith:/blog`, `url:query:utm_source=ads` |
 | `ua:<op>:<value>` | `ua:device:mobile`, `ua:browser:safari`, `ua:os:ios` |
+| `dom:has:<selector>` | `dom:has:html[lang\|="ru"]`, `dom:has:body.logged-in`, `dom:has:html:not([lang\|="ru"])` |
+| `storage:<area>:<op>:<key>[=<value>]` | `storage:cookie:equals:consent=granted`, `storage:cookie:has:OptanonConsent=C0002:1`, `storage:session:has:seen_popup` |
 | a function | Return `true` to run, `false` to skip; decided there and then, so not async |
 | a boolean | `false` skips |
 
-Operators: `equals`/`is`, `contains`, `startsWith`, `in` for language;
-`equals`/`is`, `contains`, `offset` for timezone; `contains`, `path`,
+Operators: `equals`/`is`, `has`, `startsWith`, `in` for language;
+`equals`/`is`, `has`, `offset` for timezone; `has`, `path`,
 `pathStartsWith`, `pathEndsWith`, `query`, `hostname`, `matches`, `pathMatches`
-for URL; `contains`, `equals`/`is`, `matches`, `browser`, `device`,
-`os`/`platform` for user agent.
+for URL; `has`, `equals`/`is`, `matches`, `browser`, `device`,
+`os`/`platform` for user agent; `has`, `equals`/`is`, `startsWith`, `matches`
+for storage. `has` is always "contains". The storage areas are `cookie`,
+`local` (`localStorage`) and `session` (`sessionStorage`). `has:key` passes
+when the key is there, `has:key=value` when its value contains `value`; the
+other operators take `key=value` and compare the key's value, a cookie's
+decoded. Storage the browser blocks counts as empty.
+
+`dom:has:<selector>` passes when an element matches the CSS selector, so
+attribute selectors, classes and `:not()` do the comparing: `html[lang|="ru"]`
+is the page's language, `ru` or `ru-RU` but not `rus`. It looks at the
+document as it is when the condition is checked, and the first check comes
+before any trigger is waited for. `<html>` is always there; `body` and the
+page's elements are there when `load()` runs after the document is parsed
+(on `DOMContentLoaded`, or from a script at the end of `<body>`). An element
+that turns up later is what the `appears:` trigger is for. An invalid
+selector fails the condition.
 
 Combine with an array (all must pass) or an operator object:
 
 ```js
 { condition: ['ua:device:desktop', 'url:pathStartsWith:/app'] }
-{ condition: { operator: 'or', conditions: ['lang:is:ru-RU', 'tz:contains:Europe'] } }
+{ condition: { operator: 'or', conditions: ['lang:is:ru-RU', 'tz:has:Europe'] } }
 ```
 
 An unparseable regular expression fails the condition rather than throwing.
@@ -490,10 +515,20 @@ A plugin is a function that receives the instance and registers handlers on it.
 
 | Plugin | What it adds |
 | --- | --- |
-| `conditions` | The five condition handlers above |
+| `conditions` | The seven condition handlers above |
 | `triggers` | The nine trigger handlers above |
 | `logger` | A console logger with readable message names. Errors always; QSL's own progress only with `qsl.debug = true` |
-| `events` | Re-dispatches `DOMContentLoaded` and `load` per process, so late-loaded third-party scripts that listen for them still initialise |
+| `events` | Re-dispatches `DOMContentLoaded` and `load` to processes with `lifecycleEvents: true`, so late-loaded third-party scripts that listen for them still initialise. A run with no such process is left untouched |
+
+With the `events` plugin, a process with `lifecycleEvents: true` gets each
+`DOMContentLoaded` or `load` listener it registers after that event has
+passed run exactly once: when the process completes, or at once if it
+registers later while the run is still going. A listener registered before
+the event is left to the browser, which runs it once as usual. The listener
+has to be traced to the process — through `document.currentScript` while its
+code runs, or else by the stack trace against a script's `src` — and
+registered before the run ends; one that is not stays with the browser and,
+the event being over, does not run.
 
 A plugin extends QSL in three ways, each a `Set` on the instance:
 

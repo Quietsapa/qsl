@@ -36,7 +36,8 @@
   Things to try:
 
     - Visit Product several times. reviews.js registers a DOMContentLoaded
-      listener every time, and the events plugin runs it every time — once.
+      listener every time, and the events plugin runs it every time — once
+      (the process asks for it with lifecycleEvents: true).
     - Go Home, then click Product within 1.5 s. The home run is still waiting
       on the newsletter popup, so the product tags are deferred until it
       settles: processes added during a run wait for its regular flows.
@@ -182,6 +183,7 @@ window.QSLReady = function () {
       id: 'reviews',
       type: 'script',
       src: './vendor/reviews.js',
+      lifecycleEvents: true,
       condition: 'url:matches:#/product$',
       trigger: { operator: 'or', triggers: ['appears:.product-card', 'delay:3000'] }
     });

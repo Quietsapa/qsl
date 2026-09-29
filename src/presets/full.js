@@ -2,7 +2,7 @@ import core from '../core.js';
 
 import { Script, InlineScript, InlineStyle, Stylesheet, Pixel, Shadow, HTML } from '../types.js';
 
-import { mediaQueryCondition, languageCondition, timezoneCondition, urlCondition, userAgentCondition } from '../plugins/conditions.js';
+import { mediaQueryCondition, languageCondition, timezoneCondition, urlCondition, userAgentCondition, storageCondition, domCondition } from '../plugins/conditions.js';
 import { interactionTrigger, loadTrigger, idleTrigger, domReadyTrigger, delayTrigger, hoverTrigger, visibleTrigger, appearsTrigger, mediaQueryTrigger } from '../plugins/triggers.js';
 
 import logger from '../plugins/logger.js';
@@ -19,6 +19,8 @@ core
     .use(timezoneCondition)
     .use(urlCondition)
     .use(userAgentCondition)
+    .use(storageCondition)
+    .use(domCondition)
 
     .use(interactionTrigger)
     .use(loadTrigger)

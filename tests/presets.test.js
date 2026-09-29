@@ -28,10 +28,10 @@ describe('full preset', () => {
         );
     });
 
-    it('registers all nine triggers and all five conditions', async () => {
+    it('registers all nine triggers and all seven conditions', async () => {
         const qsl = await loadPreset('full');
         expect(qsl.triggerHandlers.size).toBe(9);
-        expect(qsl.conditionHandlers.size).toBe(5);
+        expect(qsl.conditionHandlers.size).toBe(7);
 
         for (const trigger of ['interaction', true, 'load', 'idle', 'domready', 'delay:1', 'hover:#x', 'visible:#x', 'appears:#x', 'media:(min-width: 1px)']) {
             expect(qsl.getTriggerFunction(trigger, {}), String(trigger)).toBeTypeOf('function');

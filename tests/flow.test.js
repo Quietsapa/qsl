@@ -574,7 +574,7 @@ describe('combined plugins', () => {
         const { default: conditions } = await import('../src/plugins/conditions.js');
         const { default: triggers } = await import('../src/plugins/triggers.js');
         core.use(conditions).use(triggers);
-        expect(core.conditionHandlers.size).toBe(5);
+        expect(core.conditionHandlers.size).toBe(7);
         expect(core.triggerHandlers.size).toBe(9);
     });
 });

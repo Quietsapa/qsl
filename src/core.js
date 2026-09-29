@@ -1,5 +1,5 @@
 export default {
-    VERSION: '0.8.0',
+    VERSION: '0.9.0',
     PREFIX: 'qsl-',
     FLOW_TYPE: {
         DEFAULT: 'default',
@@ -17,7 +17,6 @@ export default {
         group: null,
         paused: false,
         preload: false,
-        fireEvents: true,
         depends: []
     },
     EVENTS: {
@@ -125,7 +124,7 @@ export default {
          * QSL:* DOM events, as one listener. A process's detail is a copy of its
          * public fields; a flow's is its id. Both carry the error or reason if any.
          */
-        this.listeners.add(function ({ type, process, flow, args }) {
+        this.listeners.add(({ type, process, flow, args }) => {
             const name = /^(PROCESS|FLOW)_|^ALL_COMPLETED$/.test(type) && this.EVENTS[type.replace('PROCESS_', '').replace('FAILED', 'ERROR')];
             if (!name) return;
             let detail = null;
@@ -144,7 +143,7 @@ export default {
         /**
          * Loaded with ?async=true: call the page's callback.
          */
-        const url = loaderScript && loaderScript.src ? new URL(loaderScript.src, document.baseURI) : null;
+        const url = loaderScript?.src ? new URL(loaderScript.src, document.baseURI) : null;
         if (!url || url.searchParams.get('async') !== 'true') return this;
 
         const callback = url.searchParams.get('callback') || this.CALLBACK;
@@ -168,7 +167,8 @@ export default {
          * Added after a run completed with autoReset off: kept for the next run.
          */
         if (this._done) {
-            (this._queue ||= []).push([config, flowId]);
+            if (!this._queue) this._queue = [];
+            this._queue.push([config, flowId]);
             return this;
         }
 
@@ -177,7 +177,7 @@ export default {
          */
         config = { ...config };
 
-        config.id = config.id ? this.PREFIX + config.id : this.PREFIX + Math.random().toString(36).slice(2);
+        config.id = `${this.PREFIX}${config.id || Math.random().toString(36).slice(2)}`;
         config.skipped = false;
 
         if (!config.type) config.type = 'console';
@@ -189,7 +189,7 @@ export default {
          */
         if (this.hasStarted) {
             if (flowId == null || flowId === false) {
-                flowId = 'late-' + Math.random().toString(36).slice(2);
+                flowId = `late-${Math.random().toString(36).slice(2)}`;
             } else {
                 /**
                  * A started flow never sees processes pushed into it: they go to a late
@@ -199,9 +199,9 @@ export default {
                 const flow = this.flows.get(fid);
                 if (flow && !this.notStarted(flow)) {
                     const options = flow.options;
-                    const lateId = fid + '+late-' + Math.random().toString(36).slice(2);
+                    const lateId = `${fid}+late-${Math.random().toString(36).slice(2)}`;
                     const inherited = {};
-                    for (const key of ['condition', 'strict', 'timeout', 'retries', 'retryDelay', 'fireEvents', 'group']) {
+                    for (const key of ['condition', 'strict', 'timeout', 'retries', 'retryDelay', 'group']) {
                         if (options[key] != null) inherited[key] = options[key];
                     }
                     this.setFlowOptions(inherited, lateId);
@@ -712,7 +712,7 @@ export default {
             /**
              * Strict: a dependency not completed skips this flow.
              */
-            const strict = flow.options.strict != null ? flow.options.strict : this.strict;
+            const strict = flow.options.strict ?? this.strict;
             if (strict === true && depends.some((id) => find(id)?.outcome !== 'completed')) {
                 this.skipFlow(flow.id, 'dependency');
                 skipped = true;
@@ -749,9 +749,7 @@ export default {
      * A per-process setting: the process, then its flow, then the instance.
      */
     setting(process, key) {
-        if (process[key] != null) return process[key];
-        const flowValue = this.flows.get(process.flowId)?.options[key];
-        return flowValue != null ? flowValue : this[key];
+        return process[key] ?? this.flows.get(process.flowId)?.options[key] ?? this[key];
     },
 
     /**
@@ -815,7 +813,7 @@ export default {
     maybeComplete() {
         if (!this.hasStarted || this._done) return;
         const flows = [...this.flows.values()];
-        let done = flows.every((flow) => flow.phase === 'done');
+        const done = flows.every((flow) => flow.phase === 'done');
 
         /**
          * Late flows start after every regular flow is done, one at a time, in
@@ -838,7 +836,7 @@ export default {
         }
 
         /**
-         * Set aside (see the properties):
+         * Set aside (see the properties), with `done` a `let`:
          * for (const cb of this.completedFlowsActions) {
          *     const result = this.callback(cb, null, done, this.flows);
          *     if (typeof result === 'boolean') done = result;
@@ -1254,7 +1252,7 @@ export default {
             return;
         }
         const handler = this.types.get(process.type);
-        if (!handler) return this.fail(process, new Error('Unknown type: ' + process.type));
+        if (!handler) return this.fail(process, new Error(`Unknown type: ${process.type}`));
         process._phase = 'running';
         this.emit('PROCESS_STARTED', 'info', process);
 

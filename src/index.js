@@ -26,6 +26,8 @@ export {
     timezoneCondition,
     urlCondition,
     userAgentCondition,
+    storageCondition,
+    domCondition,
 } from './plugins/conditions.js';
 
 export {

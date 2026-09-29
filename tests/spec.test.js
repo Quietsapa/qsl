@@ -616,9 +616,9 @@ describe('API: runFlow, pauseGroup, runGroup', () => {
 });
 
 describe('Concepts: late adds', () => {
-    it('a process added to a started flow runs in a late flow that carries condition, strict, timeout, retries, retryDelay, fireEvents and group', async () => {
+    it('a process added to a started flow runs in a late flow that carries condition, strict, timeout, retries, retryDelay and group', async () => {
         const { core, start, finish } = await setup();
-        const options = { strict: true, timeout: 77, retries: 2, retryDelay: 9, fireEvents: false, group: 'g', condition: true };
+        const options = { strict: true, timeout: 77, retries: 2, retryDelay: 9, group: 'g', condition: true };
         core.setFlowOptions(options, 'f');
         core.add({ id: 'first', type: 'work', ms: 50 }, 'f');
         const ending = start();

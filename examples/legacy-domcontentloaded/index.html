@@ -32,8 +32,9 @@
   The `events` plugin watches for exactly this. When a process registers a
   DOMContentLoaded or load listener after the real event has passed, it
   attributes that listener to the process that registered it and dispatches
-  the event for that process alone. The vendor script is not modified, and
-  other scripts on the page are not disturbed.
+  the event for that process alone. A process asks for this with
+  `lifecycleEvents: true`; the others are left alone. The vendor script is
+  not modified, and other scripts on the page are not disturbed.
 
   Four scripts below all load late — long after both events have fired:
 
@@ -157,19 +158,22 @@ window.QSLReady = function () {
   qsl.add({
     id: 'vendor-inline',
     type: 'inline-script',
+    lifecycleEvents: true,
     code: "document.addEventListener('DOMContentLoaded', function () { window.vendorBooted('dcl-inline'); });"
   }, 'vendors');
 
   qsl.add({
     id: 'vendor-dcl',
     type: 'script',
-    src: './vendor-dcl.js'
+    src: './vendor-dcl.js',
+    lifecycleEvents: true
   }, 'vendors');
 
   qsl.add({
     id: 'vendor-load',
     type: 'script',
-    src: './vendor-load.js'
+    src: './vendor-load.js',
+    lifecycleEvents: true
   }, 'vendors');
 
   qsl.load();

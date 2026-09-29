@@ -61,14 +61,21 @@ export type Trigger =
  */
 export interface CustomConditions {}
 
-type LanguageCondition = `lang:${'equals' | 'is' | 'contains' | 'startsWith' | 'in'}:${string}`;
-type TimezoneCondition = `${'tz' | 'timezone'}:${'equals' | 'is' | 'contains' | 'offset'}:${string}`;
-type UrlCondition = `url:${'contains' | 'path' | 'pathStartsWith' | 'pathEndsWith' | 'query' | 'hostname' | 'matches' | 'pathMatches'}:${string}`;
+type LanguageCondition = `lang:${'equals' | 'is' | 'has' | 'startsWith' | 'in'}:${string}`;
+type TimezoneCondition = `${'tz' | 'timezone'}:${'equals' | 'is' | 'has' | 'offset'}:${string}`;
+type UrlCondition = `url:${'has' | 'path' | 'pathStartsWith' | 'pathEndsWith' | 'query' | 'hostname' | 'matches' | 'pathMatches'}:${string}`;
 type UserAgentCondition =
-    | `${'ua' | 'userAgent'}:${'contains' | 'equals' | 'is' | 'matches'}:${string}`
+    | `${'ua' | 'userAgent'}:${'has' | 'equals' | 'is' | 'matches'}:${string}`
     | `${'ua' | 'userAgent'}:browser:${'chrome' | 'firefox' | 'safari' | 'edge' | 'opera' | 'ie' | 'chromium'}`
     | `${'ua' | 'userAgent'}:device:${'mobile' | 'tablet' | 'desktop'}`
     | `${'ua' | 'userAgent'}:${'os' | 'platform'}:${'windows' | 'mac' | 'ios' | 'android' | 'linux' | 'unix' | 'chromeos'}`;
+/** `has:key` (the key is there), `has:key=value` (its value has that text), or `<op>:key=value`. */
+type StorageCondition =
+    | `storage:${'cookie' | 'local' | 'session'}:has:${string}`
+    | `storage:${'cookie' | 'local' | 'session'}:${'equals' | 'is' | 'startsWith' | 'matches'}:${string}=${string}`;
+
+/** Passes when an element in the document matches the CSS selector, as the document is when checked. */
+type DomCondition = `dom:has:${string}`;
 
 /**
  * The string forms of the built-in conditions plugin.
@@ -78,7 +85,9 @@ export type BuiltInCondition =
     | LanguageCondition
     | TimezoneCondition
     | UrlCondition
-    | UserAgentCondition;
+    | UserAgentCondition
+    | StorageCondition
+    | DomCondition;
 
 /**
  * Whether a flow or process runs. It is checked when it would start, and
@@ -125,8 +134,8 @@ export interface ProcessOptions {
     data?: Record<string, string | number | boolean>;
     /** Append to `<body>` instead of `<head>`. */
     footer?: boolean;
-    /** Let the events plugin re-dispatch lifecycle events for this process. */
-    fireEvents?: boolean;
+    /** Opt in: with the events plugin, a DOMContentLoaded or load listener this process registers after the event, during the run, runs once. */
+    lifecycleEvents?: boolean;
     /** Awaited once, before the first attempt and outside `timeout`; throwing or rejecting fails the process. */
     onBeforeStart?: (process: Process) => void | Promise<void>;
     onComplete?: () => void;
@@ -300,7 +309,6 @@ export interface FlowOptions {
     retryDelay?: number;
     /** Emit `<link rel=preload>` for its scripts and stylesheets. */
     preload?: boolean;
-    fireEvents?: boolean;
     /** Called when the flow starts, after its `delay`. Not waited for. */
     onBeforeStart?: (() => void) | null;
     /** Called when the flow ends with no process failed or skipped because of a dependency. */
@@ -494,6 +502,8 @@ export declare const languageCondition: Plugin;
 export declare const timezoneCondition: Plugin;
 export declare const urlCondition: Plugin;
 export declare const userAgentCondition: Plugin;
+export declare const storageCondition: Plugin;
+export declare const domCondition: Plugin;
 
 /** Every built-in trigger. */
 export declare const triggers: Plugin;

@@ -134,10 +134,17 @@ export default function(QSL) {
     });
 
     /**
-     * Initialize event interception when QSL loads.
+     * Initialize event interception when QSL loads, or when a process that
+     * asks for it (`lifecycleEvents: true`) is added during the run. A run
+     * without one is never intercepted.
      */
-    QSL.listeners.add(function({ type }) {
-        if (type !== 'LOAD' || active) return;
+    QSL.listeners.add(function({ type, process }) {
+        if (active) return;
+        if (type === 'LOAD') {
+            if (![...this.flows.values()].some((flow) => flow.processes.some((p) => p.lifecycleEvents === true))) return;
+        } else if (type !== 'PROCESS_ADDED' || !this.hasStarted || process.lifecycleEvents !== true) {
+            return;
+        }
 
         const iterator = (type, eventType, changeEventName) => {
             let currentScriptId = null;
@@ -215,13 +222,24 @@ export default function(QSL) {
                 const process = flow?.processes.find(p => p.id === currentScriptId || p.id === this.PREFIX + currentScriptId);
                 
                 if (process) {
-                    const shouldFireEvents = process.fireEvents !== false && (flow.options.fireEvents !== false);
-                    if (shouldFireEvents) {
+                    if (process.lifecycleEvents === true) {
                         const key = processKey(process);
                         const eventName = `${type}:${key}`;
-                        if (!customEvents.has(key)) customEvents.set(key, []);
-                        const events = customEvents.get(key);
-                        if (!events.some(e => e.name === eventName)) events.push({ type: eventType, name: eventName });
+                        if (this.processStates.has(process.id)) {
+                            /**
+                             * Registered after its process settled (from a
+                             * timer, say): nothing else will dispatch it, so
+                             * it is dispatched right after it is added.
+                             */
+                            if (changeEventName) {
+                                const target = eventType === this.EVENTS.DOMREADY ? document : window;
+                                queueMicrotask(() => target.dispatchEvent(new Event(eventName)));
+                            }
+                        } else {
+                            if (!customEvents.has(key)) customEvents.set(key, []);
+                            const events = customEvents.get(key);
+                            if (!events.some(e => e.name === eventName)) events.push({ type: eventType, name: eventName });
+                        }
                         if (changeEventName) type = eventName;
                     }
                 }

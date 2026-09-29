@@ -29,6 +29,7 @@ export function languageCondition(QSL) {
             case 'equals':
             case 'is':
                 return l !== v;
+            case 'has':
             case 'contains':
                 return !l.includes(v);
             case 'startsWith':
@@ -64,6 +65,7 @@ export function timezoneCondition(QSL) {
                 case 'equals':
                 case 'is':
                     return tz !== v;
+                case 'has':
                 case 'contains':
                     return !tz.includes(v);
                 case 'offset':
@@ -102,6 +104,7 @@ export function urlCondition(QSL) {
         if (!t) return true;
         
         switch (t) {
+            case 'has':
             case 'contains':
                 return !hf.includes(v);
             case 'path':
@@ -156,13 +159,14 @@ export function userAgentCondition(QSL) {
             return null;
         }
         const p = opt.split(':');
-        const t = p[1] || 'contains';
+        const t = p[1] || 'has';
         const v = p.slice(2).join(':');
         const ua = navigator.userAgent || '';
         const uaLower = ua.toLowerCase();
         const vLower = v.toLowerCase();
 
         switch (t) {
+            case 'has':
             case 'contains':
                 if (!uaLower.includes(vLower)) return true;
                 break;
@@ -239,6 +243,115 @@ export function userAgentCondition(QSL) {
     });
 }
 
+/**
+ * Storage condition handler
+ * @param {*} QSL 
+ */
+export function storageCondition(QSL) {
+    QSL.conditionHandlers.add(function(opt) {
+        if (typeof opt !== 'string' || !opt.startsWith('storage:')) {
+            return null;
+        }
+        const p = opt.split(':');
+        const a = p[1];
+        const t = p[2];
+        const v = p.slice(3).join(':');
+
+        /**
+         * `has:key` (the key is there), or `<op>:key=value`: split at the
+         * first '=' only, like url:query.
+         */
+        const eq = v.indexOf('=');
+        const k = eq === -1 ? v : v.slice(0, eq);
+        const x = v.slice(eq + 1);
+        if (!k || (t !== 'has' && eq === -1)) return true;
+
+        /**
+         * Storage the browser blocks (privacy settings, sandboxed frames)
+         * throws: it counts as the key not being there.
+         */
+        let s = null;
+        try {
+            switch (a) {
+                case 'cookie':
+                    for (const c of document.cookie.split(';')) {
+                        const i = c.indexOf('=');
+                        if (i !== -1 && c.slice(0, i).trim() === k) {
+                            s = c.slice(i + 1).trim();
+                            try {
+                                s = decodeURIComponent(s);
+                            } catch (e) {}
+                            break;
+                        }
+                    }
+                    break;
+                case 'local':
+                    s = window.localStorage.getItem(k);
+                    break;
+                case 'session':
+                    s = window.sessionStorage.getItem(k);
+                    break;
+                default:
+                    return true;
+            }
+        } catch (e) {
+            s = null;
+        }
+        if (s === null) return true;
+
+        switch (t) {
+            case 'has':
+            case 'contains':
+                return eq !== -1 && !s.includes(x);
+            case 'equals':
+            case 'is':
+                return s !== x;
+            case 'startsWith':
+                return !s.startsWith(x);
+            case 'matches':
+                try {
+                    return !(new RegExp(x)).test(s);
+                } catch (e) {
+                    return true;
+                }
+            default:
+                return true;
+        }
+    });
+}
+
+/**
+ * DOM condition handler
+ * @param {*} QSL 
+ */
+export function domCondition(QSL) {
+    QSL.conditionHandlers.add(function(opt) {
+        if (typeof opt !== 'string' || !opt.startsWith('dom:')) {
+            return null;
+        }
+        const p = opt.split(':');
+        const t = p[1];
+        const v = p.slice(2).join(':');
+
+        if (!v) return true;
+
+        switch (t) {
+            case 'has':
+                /**
+                 * Checked as the document is now: an element added later is
+                 * a job for the appears: trigger.
+                 */
+                try {
+                    return !document.querySelector(v);
+                } catch (e) {
+                    return true; // Invalid selector, fail condition
+                }
+            default:
+                return true;
+        }
+    });
+}
+
 export default function(QSL) {
     // Media query handler
     mediaQueryCondition(QSL);
@@ -254,4 +367,10 @@ export default function(QSL) {
     
     // User agent handler
     userAgentCondition(QSL);
+
+    // Storage handler
+    storageCondition(QSL);
+
+    // DOM handler
+    domCondition(QSL);
 }

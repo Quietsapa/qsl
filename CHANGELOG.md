@@ -6,6 +6,55 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-29
+
+Conditions that read the page and its storage, one word for "contains", and
+lifecycle events only where a process asks for them. Two changes need a look
+before upgrading: the bundles now require an ES2020 browser, and a process
+that relies on the `events` plugin to receive a late `DOMContentLoaded` or
+`load` has to say so with `lifecycleEvents: true`.
+
+### Added
+
+- A `storage:` condition in the `conditions` plugin (and the full bundle),
+  with the operators the other conditions use:
+  `storage:<cookie|local|session>:has:<key>` passes when the key is there,
+  `has:<key>=<value>` when its value contains `value`; `equals`/`is`,
+  `startsWith` and `matches` take `<key>=<value>` and compare the key's
+  value, a cookie's decoded. Storage the browser blocks counts as empty
+  rather than as an error. Exported on its own as `storageCondition`.
+- A `dom:has:<selector>` condition in the `conditions` plugin (and the full
+  bundle): it passes when an element in the document matches the CSS
+  selector. The page's language is `dom:has:html[lang|="ru"]`; classes,
+  data attributes and `:not()` work the same way. It sees the document as it
+  is when checked. Exported on its own as `domCondition`.
+
+### Changed
+
+- The condition operator for "contains" is `has` everywhere: `lang:has:`,
+  `tz:has:`, `url:has:`, `ua:has:`, and `storage:…:has:` (`ua:` with no
+  operator means `has`). `contains` keeps working as before, so existing
+  conditions do not start failing, but it is no longer in the types or the
+  README; TypeScript flags it.
+- **Breaking:** the bundles are built for ES2020 instead of ES2019: Chrome
+  and Edge 80, Firefox 74, Safari 13.1, iOS Safari 13.4, Samsung Internet 13
+  or newer, about 99% of browsers in use (caniuse, September 2026). What
+  drops out is some 0.07% of traffic, mostly iOS 12 and Chrome 79; there QSL
+  does not parse at all. In return the full bundle is some 270 bytes smaller
+  and the slim one some 220. The README now states the supported browsers.
+- **Breaking:** the `events` plugin re-dispatches `DOMContentLoaded` and
+  `load` only to processes that ask for it with the new `lifecycleEvents:
+  true`; it used to do so for every process. A run with no such process is
+  not intercepted at all: `addEventListener` is left as it is. The
+  `fireEvents` option is gone, from processes (use `lifecycleEvents`) and
+  from flows (set it on the processes).
+
+### Fixed
+
+- A lifecycle listener a process registered after it had completed (from a
+  timer, say) while the run went on was renamed for that process but never
+  dispatched, so it never ran. It now runs at once, and once.
+
 ## [0.8.0] - 2026-09-23
 
 One record per flow, and plugins that follow the run instead of being
@@ -957,7 +1006,8 @@ list of new features.
   the internal bundle-composition map. Those stay in the private repository;
   this one ships only the runtime.
 
-[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/Quietsapa/qsl/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Quietsapa/qsl/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Quietsapa/qsl/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Quietsapa/qsl/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Quietsapa/qsl/compare/v0.5.1...v0.6.0
